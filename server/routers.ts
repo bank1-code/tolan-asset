@@ -15,7 +15,16 @@ import { inventoryCountRouter } from "./routers/inventoryCount";
 export const appRouter = router({
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    me: publicProcedure.query(({ ctx }) => ctx.user ? ({
+      id: ctx.user.id,
+      username: ctx.user.username,
+      name: ctx.user.name,
+      email: ctx.user.email,
+      role: ctx.user.role,
+      employeeId: ctx.user.employeeId,
+      loginMethod: ctx.user.loginMethod,
+      lastSignedIn: ctx.user.lastSignedIn,
+    }) : null),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

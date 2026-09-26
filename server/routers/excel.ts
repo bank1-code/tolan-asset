@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "../_core/trpc";
+import { operatorProcedure, adminProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   assets,
@@ -119,6 +119,8 @@ const custodyHeaders = [
 
 const employeeHeaders = [
   { key: "fullName", label: "الاسم الكامل" },
+  { key: "departmentName", label: "القسم" },
+  { key: "locationName", label: "الموقع" },
   { key: "fingerprintId", label: "رقم البصمة" },
   { key: "nationalId", label: "رقم الهوية" },
   { key: "phone", label: "رقم الهاتف" },
@@ -152,7 +154,7 @@ export const excelRouter = router({
   // ==========================================
   // تصدير الأصول
   // ==========================================
-  exportAssets: protectedProcedure.mutation(async ({ ctx }) => {
+  exportAssets: operatorProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new Error("Database not available");
 
@@ -203,7 +205,7 @@ export const excelRouter = router({
   // ==========================================
   // استيراد الأصول
   // ==========================================
-  importAssets: protectedProcedure
+  importAssets: operatorProcedure
     .input(z.object({ base64Data: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -217,9 +219,6 @@ export const excelRouter = router({
       const allDepts = await db.select().from(departments);
       const allLocs = await db.select().from(locations);
 
-      const empMap = new Map(allEmployees.map(e => [e.fullName, e.id]));
-      const deptMap = new Map(allDepts.map(d => [d.name, d.id]));
-      const locMap = new Map(allLocs.map(l => [l.name, l.id]));
 
       let imported = 0;
       let skipped = 0;
@@ -233,15 +232,22 @@ export const excelRouter = router({
             continue;
           }
 
+          const location = allLocs.find(l => l.name === row.locationName);
+          if (!location) throw new Error("الموقع غير موجود أو غير محدد");
+          const department = allDepts.find(d => d.name === row.departmentName && d.locationId === location.id);
+          if (!department) throw new Error("القسم لا يتبع الموقع المحدد أو غير موجود");
+          const employee = allEmployees.find(e => e.fullName === row.employeeName && e.departmentId === department.id);
+          if (!employee) throw new Error("الموظف لا يتبع القسم المحدد أو غير موجود");
+
           await db.insert(assets).values({
             assetName: row.assetName,
             assetCode: row.assetCode || null,
             quantity: parseInt(row.quantity) || 1,
             assetValue: row.assetValue || "0",
             condition: row.condition || "جيد جدًا",
-            assignedTo: empMap.get(row.employeeName) || null,
-            departmentId: deptMap.get(row.departmentName) || null,
-            locationId: locMap.get(row.locationName) || null,
+            assignedTo: employee.id,
+            departmentId: department.id,
+            locationId: location.id,
             status: "ACTIVE",
             notes: row.notes || null,
           });
@@ -267,7 +273,7 @@ export const excelRouter = router({
   // ==========================================
   // تصدير العهد
   // ==========================================
-  exportCustody: protectedProcedure.mutation(async ({ ctx }) => {
+  exportCustody: operatorProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new Error("Database not available");
 
@@ -318,7 +324,7 @@ export const excelRouter = router({
   // ==========================================
   // استيراد العهد
   // ==========================================
-  importCustody: protectedProcedure
+  importCustody: operatorProcedure
     .input(z.object({ base64Data: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -331,9 +337,6 @@ export const excelRouter = router({
       const allDepts = await db.select().from(departments);
       const allLocs = await db.select().from(locations);
 
-      const empMap = new Map(allEmployees.map(e => [e.fullName, e.id]));
-      const deptMap = new Map(allDepts.map(d => [d.name, d.id]));
-      const locMap = new Map(allLocs.map(l => [l.name, l.id]));
 
       let imported = 0;
       let skipped = 0;
@@ -347,15 +350,22 @@ export const excelRouter = router({
             continue;
           }
 
+          const location = allLocs.find(l => l.name === row.locationName);
+          if (!location) throw new Error("الموقع غير موجود أو غير محدد");
+          const department = allDepts.find(d => d.name === row.departmentName && d.locationId === location.id);
+          if (!department) throw new Error("القسم لا يتبع الموقع المحدد أو غير موجود");
+          const employee = allEmployees.find(e => e.fullName === row.employeeName && e.departmentId === department.id);
+          if (!employee) throw new Error("الموظف لا يتبع القسم المحدد أو غير موجود");
+
           await db.insert(custodyItems).values({
             name: row.name,
             code: row.code || null,
             quantity: parseInt(row.quantity) || 1,
             assetValue: row.assetValue || "0",
             condition: row.condition || "جيد جدًا",
-            assignedTo: empMap.get(row.employeeName) || null,
-            departmentId: deptMap.get(row.departmentName) || null,
-            locationId: locMap.get(row.locationName) || null,
+            assignedTo: employee.id,
+            departmentId: department.id,
+            locationId: location.id,
             status: "ACTIVE",
             notes: row.notes || null,
           });
@@ -381,18 +391,23 @@ export const excelRouter = router({
   // ==========================================
   // تصدير الموظفين
   // ==========================================
-  exportEmployees: protectedProcedure.mutation(async ({ ctx }) => {
+  exportEmployees: operatorProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new Error("Database not available");
 
-    const allEmployees = await db.select().from(employees).orderBy(employees.id);
+    const allEmployees = await db.select({
+      fullName: employees.fullName,
+      departmentName: departments.name,
+      locationName: locations.name,
+      fingerprintId: employees.fingerprintId,
+      nationalId: employees.nationalId,
+      phone: employees.phone,
+    }).from(employees)
+      .leftJoin(departments, eq(employees.departmentId, departments.id))
+      .leftJoin(locations, eq(departments.locationId, locations.id))
+      .orderBy(employees.id);
 
-    const data = allEmployees.map(e => ({
-      fullName: e.fullName,
-      fingerprintId: e.fingerprintId,
-      nationalId: e.nationalId,
-      phone: e.phone,
-    }));
+    const data = allEmployees;
 
     const base64 = createExcelBuffer(data as Record<string, unknown>[], employeeHeaders, "الموظفين");
 
@@ -411,7 +426,7 @@ export const excelRouter = router({
   // ==========================================
   // استيراد الموظفين
   // ==========================================
-  importEmployees: protectedProcedure
+  importEmployees: adminProcedure
     .input(z.object({ base64Data: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -419,6 +434,9 @@ export const excelRouter = router({
 
       const rows = parseExcelBuffer(input.base64Data, employeeHeaders);
       if (rows.length === 0) throw new Error("الملف فارغ أو لا يحتوي على بيانات صالحة");
+
+      const allDepts = await db.select().from(departments);
+      const allLocs = await db.select().from(locations);
 
       let imported = 0;
       let skipped = 0;
@@ -432,8 +450,14 @@ export const excelRouter = router({
             continue;
           }
 
+          const location = allLocs.find(l => l.name === row.locationName);
+          if (!location) throw new Error("الموقع غير موجود أو غير محدد");
+          const department = allDepts.find(d => d.name === row.departmentName && d.locationId === location.id);
+          if (!department) throw new Error("القسم لا يتبع الموقع المحدد أو غير موجود");
+
           await db.insert(employees).values({
             fullName: row.fullName,
+            departmentId: department.id,
             fingerprintId: row.fingerprintId || null,
             nationalId: row.nationalId || null,
             phone: row.phone || null,
@@ -460,7 +484,7 @@ export const excelRouter = router({
   // ==========================================
   // تصدير التقارير
   // ==========================================
-  exportReport: protectedProcedure
+  exportReport: operatorProcedure
     .input(z.object({
       reportType: z.enum(["all", "assets", "custody"]),
     }))
@@ -558,7 +582,7 @@ export const excelRouter = router({
   // ==========================================
   // تصدير سجل التدقيق
   // ==========================================
-  exportAuditLog: protectedProcedure
+  exportAuditLog: operatorProcedure
     .input(z.object({
       tableName: z.string().optional(),
       actionType: z.string().optional(),
@@ -598,7 +622,7 @@ export const excelRouter = router({
   // ==========================================
   // تحميل قالب Excel فارغ
   // ==========================================
-  downloadTemplate: protectedProcedure
+  downloadTemplate: operatorProcedure
     .input(z.object({ type: z.enum(["assets", "custody", "employees"]) }))
     .mutation(async ({ input }) => {
       const headersMap = {
@@ -640,6 +664,8 @@ export const excelRouter = router({
       } else {
         sampleData.push({
           fullName: "مثال: أحمد محمد",
+          departmentName: "اسم القسم",
+          locationName: "اسم الموقع",
           fingerprintId: "1001",
           nationalId: "1234567890",
           phone: "0500000000",

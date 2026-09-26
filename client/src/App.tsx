@@ -24,6 +24,7 @@ import Tracking from "./pages/Tracking";
 import InventoryCount from "./pages/InventoryCount";
 import BrowseAssets from "./pages/BrowseAssets";
 import Login from "./pages/Login";
+import EmployeePortal from "./pages/EmployeePortal";
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const utils = trpc.useUtils();
@@ -60,6 +61,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function Router() {
+  const { data: user } = trpc.auth.me.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
+  if (user?.role === "employee") {
+    return <AuthGate><Switch><Route path="/my-items" component={EmployeePortal} /><Route path="/" component={EmployeePortal} /><Route component={EmployeePortal} /></Switch></AuthGate>;
+  }
   return (
     <AuthGate>
       <Switch>
@@ -71,8 +76,8 @@ function Router() {
         <Route path="/clearance" component={Clearance} />
         <Route path="/archive" component={Archive} />
         <Route path="/reports" component={Reports} />
-        <Route path="/users" component={UsersPage} />
-        <Route path="/settings" component={Settings} />
+        {(user?.role === "owner" || user?.role === "admin") && <Route path="/users" component={UsersPage} />}
+        {(user?.role === "owner" || user?.role === "admin") && <Route path="/settings" component={Settings} />}
         <Route path="/audit-log" component={AuditLog} />
         <Route path="/tracking" component={Tracking} />
         <Route path="/inventory-count" component={InventoryCount} />

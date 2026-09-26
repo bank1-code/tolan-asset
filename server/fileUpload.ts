@@ -54,7 +54,10 @@ router.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
     // التحقق من المصادقة باستخدام sdk
     try {
-      await sdk.authenticateRequest(req as any);
+      const user = await sdk.authenticateRequest(req as any);
+      if (!(["owner", "admin", "accountant"] as string[]).includes(user.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لرفع مستندات الأرشيف" });
+      }
     } catch {
       return res.status(401).json({ error: "غير مصرح - يرجى تسجيل الدخول" });
     }

@@ -6,6 +6,7 @@ import { useState, useRef, useEffect } from "react";
 import { Bell, X, CheckCheck, ArrowLeft } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 const ACTION_ICONS: Record<string, string> = {
   CREATE: "➕",
@@ -55,11 +56,13 @@ export default function NotificationPanel() {
   });
   const panelRef = useRef<HTMLDivElement>(null);
   const [, setLocation] = useLocation();
+  const { user } = useAuth();
 
   // جلب آخر 10 عمليات من سجل التدقيق
+  const canViewAudit = user?.role === "owner" || user?.role === "admin" || user?.role === "accountant";
   const { data, refetch } = trpc.records.audit.list.useQuery(
     { limit: 10, offset: 0 },
-    { refetchInterval: 30000 } // تحديث كل 30 ثانية
+    { refetchInterval: 30000, enabled: canViewAudit }
   );
 
   const notifications = data?.rows || [];
@@ -93,6 +96,8 @@ export default function NotificationPanel() {
     setOpen(false);
     setLocation("/audit");
   };
+
+  if (!canViewAudit) return null;
 
   return (
     <div className="relative" ref={panelRef}>

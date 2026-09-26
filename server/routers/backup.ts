@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "../_core/trpc";
+import { ownerProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import { auditLog } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
@@ -336,7 +336,7 @@ export const backupRouter = router({
   // ==========================================
   // إنشاء نسخة احتياطية كاملة من القاعدة الفعلية
   // ==========================================
-  create: protectedProcedure.mutation(async ({ ctx }) => {
+  create: ownerProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new Error("قاعدة البيانات غير متوفرة");
 
@@ -422,7 +422,7 @@ export const backupRouter = router({
   // ==========================================
   // استعادة نسخة احتياطية كاملة
   // ==========================================
-  restore: protectedProcedure
+  restore: ownerProcedure
     .input(z.object({ base64Data: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -536,7 +536,7 @@ export const backupRouter = router({
   // ==========================================
   // عرض النسخ الاحتياطية السابقة
   // ==========================================
-  list: protectedProcedure.query(async () => {
+  list: ownerProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new Error("قاعدة البيانات غير متوفرة");
 

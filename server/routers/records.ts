@@ -3,7 +3,7 @@
  */
 import { z } from "zod";
 import { eq, desc, like, and, or, sql, gte, lte } from "drizzle-orm";
-import { protectedProcedure, adminProcedure, router } from "../_core/trpc";
+import { operatorProcedure, deleteProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   archiveDocuments,
@@ -22,7 +22,7 @@ import { TRPCError } from "@trpc/server";
 // الأرشيف
 // =============================================
 const archiveRouter = router({
-  list: protectedProcedure
+  list: operatorProcedure
     .input(z.object({
       entityType: z.string().optional(),
       search: z.string().optional(),
@@ -46,7 +46,7 @@ const archiveRouter = router({
       return db.select().from(archiveDocuments).where(where).orderBy(desc(archiveDocuments.createdAt));
     }),
 
-  getByEntity: protectedProcedure
+  getByEntity: operatorProcedure
     .input(z.object({
       entityType: z.enum(["asset", "custody"]),
       entityId: z.number(),
@@ -69,7 +69,7 @@ const archiveRouter = router({
       return doc || null;
     }),
 
-  create: protectedProcedure
+  create: operatorProcedure
     .input(z.object({
       entityType: z.string(),
       operationType: z.string(),
@@ -113,7 +113,7 @@ const archiveRouter = router({
       return { success: true, id: Number(result[0].insertId) };
     }),
 
-  update: protectedProcedure
+  update: operatorProcedure
     .input(z.object({
       id: z.number(),
       documentTitle: z.string().optional(),
@@ -158,7 +158,7 @@ const archiveRouter = router({
       return { success: true };
     }),
 
-  delete: adminProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number(), reason: z.string().optional() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -198,7 +198,7 @@ const archiveRouter = router({
 // =============================================
 const reportsRouter = router({
   // تقرير شامل للأصول والعهد
-  inventory: protectedProcedure
+  inventory: operatorProcedure
     .input(z.object({
       type: z.enum(["all", "assets", "custody"]).default("all"),
       search: z.string().optional(),
@@ -279,7 +279,7 @@ const reportsRouter = router({
     }),
 
   // إحصائيات لوحة التحكم
-  dashboard: protectedProcedure.query(async () => {
+  dashboard: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -315,7 +315,7 @@ const reportsRouter = router({
 // سجل التدقيق
 // =============================================
 const auditRouter = router({
-  list: protectedProcedure
+  list: operatorProcedure
     .input(z.object({
       tableName: z.string().optional(),
       actionType: z.string().optional(),
@@ -359,7 +359,7 @@ const auditRouter = router({
     }),
 
   // دورة حياة أصل أو عهدة (Timeline)
-  getTimeline: protectedProcedure
+  getTimeline: operatorProcedure
     .input(z.object({
       entityType: z.enum(["asset", "custody"]),
       entityId: z.number(),
@@ -404,7 +404,7 @@ const auditRouter = router({
     }),
 
   // إحصائيات سجل التدقيق
-  stats: protectedProcedure.query(async () => {
+  stats: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -439,7 +439,7 @@ const auditRouter = router({
 // =============================================
 const trackingRouter = router({
   // بحث عن أصول وعهد للتتبع
-  search: protectedProcedure
+  search: operatorProcedure
     .input(z.object({
       query: z.string().min(1),
     }))

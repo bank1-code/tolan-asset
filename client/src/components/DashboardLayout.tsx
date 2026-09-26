@@ -9,6 +9,7 @@ import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import Sidebar from "./Sidebar";
 import NotificationPanel from "./NotificationPanel";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -26,6 +27,7 @@ export default function DashboardLayout({
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [location] = useLocation();
+  const { user } = useAuth();
 
   // ✅ الإصلاح الجذري 1: إغلاق الـ Sidebar تلقائياً عند تغيير الصفحة
   useEffect(() => {
@@ -130,11 +132,11 @@ export default function DashboardLayout({
             {/* User Avatar */}
             <div className="hidden sm:flex items-center gap-2.5 pr-3 border-r border-border">
               <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                <span className="text-xs font-bold text-primary">م</span>
+                <span className="text-xs font-bold text-primary">{(user?.name || "م").slice(0, 1)}</span>
               </div>
               <div className="hidden lg:block">
-                <p className="text-xs font-bold text-foreground">المدير</p>
-                <p className="text-[10px] text-muted-foreground">مسؤول النظام</p>
+                <p className="text-xs font-bold text-foreground">{user?.name || user?.username || "مستخدم"}</p>
+                <p className="text-[10px] text-muted-foreground">{{ owner: "المالك", admin: "مدير النظام", accountant: "المحاسب", employee: "الموظف" }[user?.role || "employee"]}</p>
               </div>
             </div>
           </div>

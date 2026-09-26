@@ -3,6 +3,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -326,6 +327,8 @@ function ImageCard({ title, src }: { title: string; src: string }) {
 // المكوّن الرئيسي
 // =============================================
 export default function InventoryCount() {
+  const { user } = useAuth();
+  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [activeTab, setActiveTab] = useState("assets");
   const [selectedDept, setSelectedDept] = useState<string>("");
   const [isRunning, setIsRunning] = useState(false);
@@ -676,10 +679,12 @@ export default function InventoryCount() {
                               onClick={() => exportSessionToExcel(session)}>
                               <FileSpreadsheet className="w-4 h-4" />
                             </Button>
-                            <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500 hover:bg-red-50" title="حذف الجلسة"
-                              onClick={() => deleteSession.mutate({ id: session.id })}>
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            {canDelete && (
+                              <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500 hover:bg-red-50" title="حذف الجلسة"
+                                onClick={() => deleteSession.mutate({ id: session.id })}>
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
                           </div>
                         </td>
                       </tr>

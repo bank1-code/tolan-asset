@@ -87,6 +87,16 @@ export default function Sidebar({ collapsed, onToggle, onClose }: SidebarProps) 
   const { user, logout } = useAuth();
   const { canInstall, isInstalled, isInstalling, install } = usePWAInstall();
   const { data: branding } = trpc.settings.branding.get.useQuery();
+  const visibleMenuGroups = user?.role === "employee"
+    ? [{ label: "حسابي", items: [{ path: "/my-items", icon: HandCoins, label: "أصولي وعهدي" }] }]
+    : menuGroups.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          if (user?.role === "accountant" && (item.path === "/users" || item.path === "/settings")) return false;
+          if ((item.path === "/users" || item.path === "/settings") && user?.role !== "owner" && user?.role !== "admin") return false;
+          return true;
+        }),
+      })).filter((group) => group.items.length > 0);
 
   const handleLogout = async () => {
     await logout();
@@ -157,7 +167,7 @@ export default function Sidebar({ collapsed, onToggle, onClose }: SidebarProps) 
 
       {/* Menu */}
       <nav className="flex-1 overflow-y-auto py-3 px-2.5">
-        {menuGroups.map((group) => (
+        {visibleMenuGroups.map((group) => (
           <div key={group.label} className="mb-4">
             {!collapsed && (
               <p className="text-[10px] font-bold text-muted-foreground/70 uppercase tracking-wider px-2.5 mb-1.5">
@@ -300,7 +310,7 @@ export default function Sidebar({ collapsed, onToggle, onClose }: SidebarProps) 
                 {user?.name || "المستخدم"}
               </p>
               <p className="text-[10px] text-muted-foreground truncate">
-                {user?.role === "admin" ? "مسؤول" : "مستخدم"}
+                {({ owner: "المالك", admin: "مدير النظام", accountant: "المحاسب", employee: "الموظف" } as Record<string, string>)[user?.role || ""] || "مستخدم"}
               </p>
             </div>
           )}

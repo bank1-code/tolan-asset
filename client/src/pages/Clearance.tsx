@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { printClearanceReport, generateClearanceCode } from "@/lib/clearanceReport";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
@@ -679,6 +680,8 @@ function ClearanceWizard() {
 // ===== تبويب إدارة براءة الذمة =====
 
 function ClearanceManagement() {
+  const { user } = useAuth();
+  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -879,10 +882,12 @@ function ClearanceManagement() {
                             ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             : <Printer className="h-3.5 w-3.5" />}
                         </Button>
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                          onClick={() => handleDelete(record.id)} title="حذف">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        {canDelete && (
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => handleDelete(record.id)} title="حذف">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>

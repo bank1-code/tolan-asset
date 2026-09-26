@@ -42,6 +42,7 @@ import { useRef, useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { CustodyExcelButtons } from "@/components/ExcelButtons";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 const CUSTODY_CONDITIONS = ["جيد جدًا", "جيد", "متهالك"];
 
@@ -87,6 +88,8 @@ function fileToBase64(file: File): Promise<string> {
 
 export default function Custody() {
   const [, setLocation] = useLocation();
+  const { user } = useAuth();
+  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterDept, setFilterDept] = useState("all");
   const [filterLocation, setFilterLocation] = useState("all");
@@ -132,6 +135,8 @@ export default function Custody() {
   const [showView, setShowView] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [form, setForm] = useState<CustodyFormData>({ ...emptyForm });
+  const formDepartments = departments.filter((d) => !form.location || String(d.locationId) === form.location);
+  const formEmployees = employees.filter((e) => !form.department || String(e.departmentId) === form.department);
   const [savedData, setSavedData] = useState<CustodyFormData | null>(null);
   const [documentCode, setDocumentCode] = useState("");
   const [saveDate, setSaveDate] = useState("");
@@ -283,6 +288,7 @@ export default function Custody() {
       toast.error("اسم العهدة حقل إلزامي");
       return;
     }
+    if (!form.location || !form.department || !form.assigned_to) { toast.error("يرجى اختيار الموقع ثم القسم ثم الموظف"); return; }
     try {
       setIsUploading(true);
 
@@ -307,9 +313,9 @@ export default function Custody() {
         quantity: Number(form.quantity) || 1,
         assetValue: form.asset_value || "0",
         condition: form.condition,
-        assignedTo: form.assigned_to ? Number(form.assigned_to) : null,
-        departmentId: form.department ? Number(form.department) : null,
-        locationId: form.location ? Number(form.location) : null,
+        assignedTo: Number(form.assigned_to),
+        departmentId: Number(form.department),
+        locationId: Number(form.location),
         notes: form.notes || null,
         assetImagePath: custodyImageUrl,
         invoiceImagePath: invoiceImageUrl,
@@ -358,6 +364,7 @@ export default function Custody() {
         setUploadedInvoiceImageUrl(invoiceImageUrl);
       }
 
+      if (!form.location || !form.department || !form.assigned_to) { toast.error("يرجى اختيار الموقع ثم القسم ثم الموظف"); return; }
       await updateCustody.mutateAsync({
         id: editingItem.id,
         name: form.name,
@@ -365,9 +372,9 @@ export default function Custody() {
         quantity: Number(form.quantity) || 1,
         assetValue: form.asset_value || "0",
         condition: form.condition,
-        assignedTo: form.assigned_to ? Number(form.assigned_to) : null,
-        departmentId: form.department ? Number(form.department) : null,
-        locationId: form.location ? Number(form.location) : null,
+        assignedTo: Number(form.assigned_to),
+        departmentId: Number(form.department),
+        locationId: Number(form.location),
         notes: form.notes || null,
         assetImagePath: custodyImageUrl,
         invoiceImagePath: invoiceImageUrl,
@@ -585,9 +592,11 @@ export default function Custody() {
             <button onClick={(e) => { e.stopPropagation(); setLocation(`/tracking?type=custody&id=${i.id}&name=${encodeURIComponent(i.name)}&code=${encodeURIComponent(i.code || '')}`); }} className="w-7 h-7 rounded-md hover:bg-violet-50 flex items-center justify-center transition-colors" title="عرض التتبع">
               <Activity className="w-3.5 h-3.5 text-violet-500" />
             </button>
-            <button onClick={(e) => { e.stopPropagation(); handleDelete(i); }} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors" title="حذف">
-              <Trash2 className="w-3.5 h-3.5 text-red-400" />
-            </button>
+            {canDelete && (
+              <button onClick={(e) => { e.stopPropagation(); handleDelete(i); }} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors" title="حذف">
+                <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              </button>
+            )}
           </div>
         )}
       />
@@ -694,35 +703,29 @@ export default function Custody() {
               <FormField label="الكمية" value={form.quantity} onChange={(v) => setForm((f) => ({ ...f, quantity: v }))} type="number" placeholder="1" />
               <FormField label="قيمة العهدة" value={form.asset_value} onChange={(v) => setForm((f) => ({ ...f, asset_value: v }))} type="number" placeholder="0.00" />
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">في عهدة</label>
-                <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف" /></SelectTrigger>
+                <label className="text-xs font-bold text-foreground">موقع العهدة <span className="text-red-500">*</span></label>
+                <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, department: "", assigned_to: "" }))}>
+                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع أولاً" /></SelectTrigger>
                   <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>
-                    ))}
+                    {locations_.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">القسم</label>
-                <Select value={form.department} onValueChange={(v) => setForm((f) => ({ ...f, department: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر القسم" /></SelectTrigger>
+                <label className="text-xs font-bold text-foreground">القسم <span className="text-red-500">*</span></label>
+                <Select value={form.department} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
+                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر القسم" : "اختر الموقع أولاً"} /></SelectTrigger>
                   <SelectContent>
-                    {departments.map((d) => (
-                      <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
-                    ))}
+                    {formDepartments.map((d) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">موقع العهدة</label>
-                <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع" /></SelectTrigger>
+                <label className="text-xs font-bold text-foreground">في عهدة <span className="text-red-500">*</span></label>
+                <Select value={form.assigned_to} disabled={!form.department} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
+                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.department ? "اختر الموظف" : "اختر القسم أولاً"} /></SelectTrigger>
                   <SelectContent>
-                    {locations_.map((l) => (
-                      <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
-                    ))}
+                    {formEmployees.map((e) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

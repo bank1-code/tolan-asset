@@ -23,7 +23,8 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: mysqlEnum("role", ["owner", "admin", "accountant", "employee"]).default("employee").notNull(),
+  employeeId: int("employeeId").references(() => employees.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -38,6 +39,7 @@ export type InsertUser = typeof users.$inferInsert;
 export const departments = mysqlTable("departments", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
+  locationId: int("locationId").references(() => locations.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -64,6 +66,7 @@ export type InsertLocation = typeof locations.$inferInsert;
 export const employees = mysqlTable("employees", {
   id: int("id").autoincrement().primaryKey(),
   fullName: varchar("fullName", { length: 255 }).notNull(),
+  departmentId: int("departmentId").references(() => departments.id),
   fingerprintId: varchar("fingerprintId", { length: 100 }),
   nationalId: varchar("nationalId", { length: 100 }),
   phone: varchar("phone", { length: 50 }),

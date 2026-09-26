@@ -3,7 +3,7 @@
  */
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { protectedProcedure, router } from "../_core/trpc";
+import { operatorProcedure, deleteProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   inventorySessions,
@@ -14,10 +14,11 @@ import {
   employees,
 } from "../../drizzle/schema";
 import { TRPCError } from "@trpc/server";
+import { logAuditAction } from "../security";
 
 export const inventoryCountRouter = router({
   // جلب الأصول حسب القسم
-  getAssetsByDepartment: protectedProcedure
+  getAssetsByDepartment: operatorProcedure
     .input(z.object({ departmentId: z.number() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -33,7 +34,7 @@ export const inventoryCountRouter = router({
     }),
 
   // جلب العهد حسب القسم
-  getCustodyByDepartment: protectedProcedure
+  getCustodyByDepartment: operatorProcedure
     .input(z.object({ departmentId: z.number() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -49,7 +50,7 @@ export const inventoryCountRouter = router({
     }),
 
   // البحث عن أصل أو عهدة بالكود (للاستعراض عبر NFC)
-  lookupByCode: protectedProcedure
+  lookupByCode: operatorProcedure
     .input(z.object({ code: z.string().min(1) }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -153,7 +154,7 @@ export const inventoryCountRouter = router({
     }),
 
   // حفظ جلسة جرد
-  saveSession: protectedProcedure
+  saveSession: operatorProcedure
     .input(
       z.object({
         departmentId: z.number().optional(),
@@ -176,7 +177,7 @@ export const inventoryCountRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      await db.insert(inventorySessions).values({
+      const result = await db.insert(inventorySessions).values({
         departmentId: input.departmentId ?? null,
         departmentName: input.departmentName ?? null,
         sessionType: input.sessionType,
@@ -188,11 +189,23 @@ export const inventoryCountRouter = router({
         performedByName: ctx.user?.name ?? null,
       });
 
-      return { success: true };
+      await logAuditAction({
+        tableName: "inventory_sessions",
+        recordId: Number(result[0].insertId),
+        actionType: "INVENTORY",
+        actionDescription: `جلسة جرد ${input.sessionType === "assets" ? "أصول" : "عهد"} - ${input.items.length} عنصر`,
+        newData: input,
+        performedBy: ctx.user.id,
+        performedByName: ctx.user.name || undefined,
+        ipAddress: ctx.req.ip || undefined,
+        userAgent: ctx.req.headers["user-agent"] || undefined,
+      });
+
+      return { success: true, id: Number(result[0].insertId) };
     }),
 
   // جلب جميع الجلسات
-  getSessions: protectedProcedure.query(async () => {
+  getSessions: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db
@@ -202,7 +215,7 @@ export const inventoryCountRouter = router({
   }),
 
   // حذف جلسة
-  deleteSession: protectedProcedure
+  deleteSession: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = await getDb();

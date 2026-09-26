@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import {
@@ -18,6 +19,8 @@ import {
 // مكون تبويب أرشيف (أصول أو عهد)
 // =============================================
 function ArchiveEntityTab({ entityType, entityLabel }: { entityType: string; entityLabel: string }) {
+  const { user } = useAuth();
+  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchText, setSearchText] = useState("");
 
@@ -108,9 +111,11 @@ function ArchiveEntityTab({ entityType, entityLabel }: { entityType: string; ent
         <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handlePrint}>
           <Printer className="w-3.5 h-3.5" /> طباعة
         </Button>
-        <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-destructive hover:text-destructive" onClick={handleDelete}>
-          <Trash2 className="w-3.5 h-3.5" /> حذف
-        </Button>
+        {canDelete && (
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-destructive hover:text-destructive" onClick={handleDelete}>
+            <Trash2 className="w-3.5 h-3.5" /> حذف
+          </Button>
+        )}
         <div className="mr-auto" />
         <div className="relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -192,6 +197,8 @@ function ArchiveEntityTab({ entityType, entityLabel }: { entityType: string; ent
 // مكون تبويب التوثيق (رفع ملفات)
 // =============================================
 function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "documentation_custody" }) {
+  const { user } = useAuth();
+  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [docTitle, setDocTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -436,13 +443,15 @@ function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "d
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        onClick={() => handleDocDelete(doc.id, doc.documentTitle)}
-                        title="حذف"
-                        className="w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-600 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => handleDocDelete(doc.id, doc.documentTitle)}
+                          title="حذف"
+                          className="w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-600 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

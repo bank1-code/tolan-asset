@@ -7,6 +7,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import {
   MapPin, Building2, Plus, Trash2, Edit, Save, X, Users,
@@ -18,7 +19,8 @@ import { toast } from "sonner";
 
 export default function Settings() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "owner" || user?.role === "admin";
+  const isOwner = user?.role === "owner";
   return (
     <DashboardLayout title="الإعدادات" subtitle="إدارة المواقع والأقسام والموظفين وأنواع الاستبعاد">
       <Tabs defaultValue="locations" dir="rtl">
@@ -35,10 +37,10 @@ export default function Settings() {
           <TabsTrigger value="exclusion_types" className="rounded-lg text-xs px-4 py-2 gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
             <AlertTriangle className="w-3.5 h-3.5" /> أنواع الاستبعاد
           </TabsTrigger>
-          <TabsTrigger value="backup" className="rounded-lg text-xs px-4 py-2 gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
+          {isOwner && <TabsTrigger value="backup" className="rounded-lg text-xs px-4 py-2 gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
             <Database className="w-3.5 h-3.5" /> النسخ الاحتياطي
-          </TabsTrigger>
-          {isAdmin && (
+          </TabsTrigger>}
+          {isOwner && (
             <TabsTrigger value="branding" className="rounded-lg text-xs px-4 py-2 gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <ImageIcon className="w-3.5 h-3.5" /> هوية النظام
             </TabsTrigger>
@@ -49,8 +51,8 @@ export default function Settings() {
         <TabsContent value="departments"><DepartmentsTab /></TabsContent>
         <TabsContent value="employees"><EmployeesTab /></TabsContent>
         <TabsContent value="exclusion_types"><ExclusionTypesTab /></TabsContent>
-        <TabsContent value="backup"><BackupTab /></TabsContent>
-        {isAdmin && <TabsContent value="branding"><BrandingTab /></TabsContent>}
+        {isOwner && <TabsContent value="backup"><BackupTab /></TabsContent>}
+        {isOwner && <TabsContent value="branding"><BrandingTab /></TabsContent>}
       </Tabs>
     </DashboardLayout>
   );
@@ -184,392 +186,60 @@ function LocationsTab() {
 function DepartmentsTab() {
   const utils = trpc.useUtils();
   const { data: depts = [], isLoading } = trpc.settings.departments.list.useQuery();
-  const createMut = trpc.settings.departments.create.useMutation({
-    onSuccess: () => { utils.settings.departments.list.invalidate(); toast.success("تم إضافة القسم بنجاح"); },
-    onError: (e) => toast.error(e.message),
-  });
-  const updateMut = trpc.settings.departments.update.useMutation({
-    onSuccess: () => { utils.settings.departments.list.invalidate(); toast.success("تم تعديل القسم بنجاح"); },
-    onError: (e) => toast.error(e.message),
-  });
-  const deleteMut = trpc.settings.departments.delete.useMutation({
-    onSuccess: () => { utils.settings.departments.list.invalidate(); toast.success("تم حذف القسم بنجاح"); },
-    onError: (e) => toast.error(e.message),
-  });
-
+  const { data: locations = [] } = trpc.settings.locations.list.useQuery();
+  const createMut = trpc.settings.departments.create.useMutation({ onSuccess: () => { utils.settings.departments.list.invalidate(); toast.success("تم إضافة القسم بنجاح"); }, onError: (e) => toast.error(e.message) });
+  const updateMut = trpc.settings.departments.update.useMutation({ onSuccess: () => { utils.settings.departments.list.invalidate(); toast.success("تم تعديل القسم بنجاح"); }, onError: (e) => toast.error(e.message) });
+  const deleteMut = trpc.settings.departments.delete.useMutation({ onSuccess: () => { utils.settings.departments.list.invalidate(); toast.success("تم حذف القسم بنجاح"); }, onError: (e) => toast.error(e.message) });
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
+  const [editLocationId, setEditLocationId] = useState("");
   const [newName, setNewName] = useState("");
+  const [newLocationId, setNewLocationId] = useState("");
 
   const handleAdd = () => {
-    if (!newName.trim()) { toast.error("يرجى إدخال اسم القسم"); return; }
-    createMut.mutate({ name: newName.trim() }, { onSuccess: () => { setNewName(""); setShowAdd(false); } });
+    if (!newName.trim() || !newLocationId) return toast.error("يرجى إدخال اسم القسم واختيار الموقع");
+    createMut.mutate({ name: newName.trim(), locationId: Number(newLocationId) }, { onSuccess: () => { setNewName(""); setNewLocationId(""); setShowAdd(false); } });
   };
-
   const handleEdit = (id: number) => {
-    if (!editName.trim()) { toast.error("يرجى إدخال اسم القسم"); return; }
-    updateMut.mutate({ id, name: editName.trim() }, { onSuccess: () => setEditId(null) });
+    if (!editName.trim() || !editLocationId) return toast.error("يرجى إدخال اسم القسم واختيار الموقع");
+    updateMut.mutate({ id, name: editName.trim(), locationId: Number(editLocationId) }, { onSuccess: () => setEditId(null) });
   };
-
-  const handleDelete = (id: number) => { deleteMut.mutate({ id }); };
 
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-bold text-foreground">الأقسام</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">{depts.length} قسم</p>
-        </div>
-        <Button size="sm" className="h-8 text-xs gap-1.5" onClick={() => setShowAdd(true)}>
-          <Plus className="w-3.5 h-3.5" /> إضافة قسم
-        </Button>
-      </div>
-
-      <div className="border border-border rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="bg-muted/30">
-              <th className="text-right text-[11px] font-bold text-muted-foreground px-4 py-3 w-12">#</th>
-              <th className="text-right text-[11px] font-bold text-muted-foreground px-4 py-3">اسم القسم</th>
-              <th className="text-center text-[11px] font-bold text-muted-foreground px-4 py-3 w-28">الإجراءات</th>
-            </tr>
-          </thead>
-          <tbody>
-            {depts.map((dept, i) => (
-              <tr key={dept.id} className="border-t border-border/50 hover:bg-muted/10 transition-colors">
-                <td className="px-4 py-3 text-xs text-muted-foreground">{i + 1}</td>
-                <td className="px-4 py-3">
-                  {editId === dept.id ? (
-                    <div className="flex items-center gap-2">
-                      <input value={editName} onChange={(e) => setEditName(e.target.value)}
-                        className="flex-1 h-8 px-3 rounded-lg bg-muted/40 border border-primary/30 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-                        autoFocus onKeyDown={(e) => e.key === "Enter" && handleEdit(dept.id)} />
-                      <button onClick={() => handleEdit(dept.id)} className="w-7 h-7 rounded-md bg-primary/10 hover:bg-primary/20 flex items-center justify-center transition-colors">
-                        <Save className="w-3.5 h-3.5 text-primary" />
-                      </button>
-                      <button onClick={() => setEditId(null)} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors">
-                        <X className="w-3.5 h-3.5 text-muted-foreground" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                        <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                      </div>
-                      <span className="text-sm font-medium text-foreground">{dept.name}</span>
-                    </div>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  {editId !== dept.id && (
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => { setEditId(dept.id); setEditName(dept.name); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors">
-                        <Edit className="w-3.5 h-3.5 text-muted-foreground" />
-                      </button>
-                      <button onClick={() => handleDelete(dept.id)} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors">
-                        <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent className="max-w-sm" dir="rtl">
-          <DialogHeader><DialogTitle className="text-lg font-bold">إضافة قسم جديد</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">اسم القسم <span className="text-red-500">*</span></label>
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="أدخل اسم القسم"
-                className="w-full h-10 px-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
-                autoFocus onKeyDown={(e) => e.key === "Enter" && handleAdd()} />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => { setShowAdd(false); setNewName(""); }}>إلغاء</Button>
-              <Button onClick={handleAdd} disabled={createMut.isPending}>
-                {createMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "حفظ القسم"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+  return <div className="space-y-4">
+    <div className="flex items-center justify-between"><div><h3 className="text-sm font-bold">الأقسام</h3><p className="text-xs text-muted-foreground">كل قسم مرتبط بموقع محدد</p></div><Button size="sm" onClick={() => setShowAdd(true)}><Plus className="w-3.5 h-3.5 ml-1" />إضافة قسم</Button></div>
+    <div className="border border-border rounded-xl overflow-hidden"><table className="w-full"><thead><tr className="bg-muted/30"><th className="text-right text-xs px-4 py-3">القسم</th><th className="text-right text-xs px-4 py-3">الموقع</th><th className="text-center text-xs px-4 py-3">الإجراءات</th></tr></thead><tbody>
+      {depts.map((dept) => <tr key={dept.id} className="border-t border-border/50"><td className="px-4 py-3">{editId === dept.id ? <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full h-9 px-3 rounded-lg border bg-muted/30" /> : <span className="text-sm font-medium">{dept.name}</span>}</td><td className="px-4 py-3">{editId === dept.id ? <Select value={editLocationId} onValueChange={setEditLocationId}><SelectTrigger><SelectValue placeholder="اختر الموقع" /></SelectTrigger><SelectContent>{locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}</SelectContent></Select> : <span className="text-sm">{dept.locationName || "غير محدد"}</span>}</td><td className="px-4 py-3"><div className="flex justify-center gap-1">{editId === dept.id ? <><button onClick={() => handleEdit(dept.id)} className="w-7 h-7 flex items-center justify-center"><Save className="w-4 h-4 text-primary" /></button><button onClick={() => setEditId(null)} className="w-7 h-7 flex items-center justify-center"><X className="w-4 h-4" /></button></> : <><button onClick={() => { setEditId(dept.id); setEditName(dept.name); setEditLocationId(dept.locationId ? String(dept.locationId) : ""); }} className="w-7 h-7 flex items-center justify-center"><Edit className="w-4 h-4" /></button><button onClick={() => deleteMut.mutate({ id: dept.id })} className="w-7 h-7 flex items-center justify-center"><Trash2 className="w-4 h-4 text-red-400" /></button></>}</div></td></tr>)}
+    </tbody></table></div>
+    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-sm" dir="rtl"><DialogHeader><DialogTitle>إضافة قسم جديد</DialogTitle></DialogHeader><div className="space-y-4"><input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="اسم القسم" className="w-full h-10 px-3 rounded-lg border bg-muted/30" /><Select value={newLocationId} onValueChange={setNewLocationId}><SelectTrigger><SelectValue placeholder="اختر الموقع" /></SelectTrigger><SelectContent>{locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}</SelectContent></Select><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setShowAdd(false)}>إلغاء</Button><Button onClick={handleAdd}>حفظ القسم</Button></div></div></DialogContent></Dialog>
+  </div>;
 }
 
 // ===== تبويب الموظفين =====
 function EmployeesTab() {
   const utils = trpc.useUtils();
   const { data: employees = [], isLoading } = trpc.settings.employees.list.useQuery();
-  const createMut = trpc.settings.employees.create.useMutation({
-    onSuccess: () => { utils.settings.employees.list.invalidate(); toast.success("تم إضافة الموظف بنجاح"); },
-    onError: (e) => toast.error(e.message),
-  });
-  const updateMut = trpc.settings.employees.update.useMutation({
-    onSuccess: () => { utils.settings.employees.list.invalidate(); toast.success("تم تعديل بيانات الموظف بنجاح"); },
-    onError: (e) => toast.error(e.message),
-  });
-  const deleteMut = trpc.settings.employees.delete.useMutation({
-    onSuccess: () => { utils.settings.employees.list.invalidate(); toast.success("تم حذف الموظف بنجاح"); },
-    onError: (e) => toast.error(e.message),
-  });
-
+  const { data: departments = [] } = trpc.settings.departments.list.useQuery();
+  const createMut = trpc.settings.employees.create.useMutation({ onSuccess: () => { utils.settings.employees.list.invalidate(); toast.success("تم إضافة الموظف بنجاح"); }, onError: (e) => toast.error(e.message) });
+  const updateMut = trpc.settings.employees.update.useMutation({ onSuccess: () => { utils.settings.employees.list.invalidate(); toast.success("تم تعديل بيانات الموظف بنجاح"); }, onError: (e) => toast.error(e.message) });
+  const deleteMut = trpc.settings.employees.delete.useMutation({ onSuccess: () => { utils.settings.employees.list.invalidate(); toast.success("تم حذف الموظف بنجاح"); }, onError: (e) => toast.error(e.message) });
+  const empty = { fullName: "", departmentId: "", fingerprintId: "", nationalId: "", phone: "" };
   const [showAdd, setShowAdd] = useState(false);
-  const [showView, setShowView] = useState<typeof employees[0] | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
-  const [editData, setEditData] = useState({ fullName: "", fingerprintId: "", nationalId: "", phone: "" });
-  const [newData, setNewData] = useState({ fullName: "", fingerprintId: "", nationalId: "", phone: "" });
+  const [newData, setNewData] = useState(empty);
+  const [editData, setEditData] = useState(empty);
   const [searchQuery, setSearchQuery] = useState("");
-
-  const filteredEmployees = employees.filter(e => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return e.fullName.toLowerCase().includes(q) ||
-      (e.fingerprintId && e.fingerprintId.includes(q)) ||
-      (e.nationalId && e.nationalId.includes(q)) ||
-      (e.phone && e.phone.includes(q));
-  });
-
-  const handleAdd = () => {
-    if (!newData.fullName.trim()) { toast.error("يرجى إدخال اسم الموظف"); return; }
-    createMut.mutate({
-      fullName: newData.fullName.trim(),
-      fingerprintId: newData.fingerprintId.trim() || null,
-      nationalId: newData.nationalId.trim() || null,
-      phone: newData.phone.trim() || null,
-    }, {
-      onSuccess: () => {
-        setNewData({ fullName: "", fingerprintId: "", nationalId: "", phone: "" });
-        setShowAdd(false);
-      }
-    });
-  };
-
-  const handleDelete = (id: number) => { deleteMut.mutate({ id }); };
-
-  const startEdit = (emp: typeof employees[0]) => {
-    setEditId(emp.id);
-    setEditData({
-      fullName: emp.fullName,
-      fingerprintId: emp.fingerprintId || "",
-      nationalId: emp.nationalId || "",
-      phone: emp.phone || "",
-    });
-  };
-
-  const handleEdit = (id: number) => {
-    if (!editData.fullName.trim()) { toast.error("يرجى إدخال اسم الموظف"); return; }
-    updateMut.mutate({
-      id,
-      fullName: editData.fullName.trim(),
-      fingerprintId: editData.fingerprintId.trim() || null,
-      nationalId: editData.nationalId.trim() || null,
-      phone: editData.phone.trim() || null,
-    }, { onSuccess: () => setEditId(null) });
-  };
-
-  if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-bold text-foreground">الموظفين</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">{employees.length} موظف</p>
-        </div>
-        <Button size="sm" className="h-8 text-xs gap-1.5" onClick={() => setShowAdd(true)}>
-          <Plus className="w-3.5 h-3.5" /> إضافة موظف
-        </Button>
-      </div>
-
-      <div className="relative">
-        <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="بحث بالاسم أو رقم البصمة أو الهوية أو الهاتف..."
-          className="w-full h-9 pr-3 pl-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all" />
-      </div>
-
-      <div className="border border-border rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="bg-muted/30">
-              <th className="text-right text-[11px] font-bold text-muted-foreground px-4 py-3 w-12">#</th>
-              <th className="text-right text-[11px] font-bold text-muted-foreground px-4 py-3">اسم الموظف</th>
-              <th className="text-center text-[11px] font-bold text-muted-foreground px-4 py-3">رقم البصمة</th>
-              <th className="text-center text-[11px] font-bold text-muted-foreground px-4 py-3">رقم الهوية</th>
-              <th className="text-center text-[11px] font-bold text-muted-foreground px-4 py-3">رقم الهاتف</th>
-              <th className="text-center text-[11px] font-bold text-muted-foreground px-4 py-3 w-32">الإجراءات</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredEmployees.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
-                  <Users className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                  لا يوجد موظفين مطابقين
-                </td>
-              </tr>
-            ) : (
-              filteredEmployees.map((emp, i) => (
-                <tr key={emp.id} className="border-t border-border/50 hover:bg-muted/10 transition-colors">
-                  <td className="px-4 py-3 text-xs text-muted-foreground">{i + 1}</td>
-                  <td className="px-4 py-3">
-                    {editId === emp.id ? (
-                      <input value={editData.fullName} onChange={(e) => setEditData({ ...editData, fullName: e.target.value })}
-                        className="w-full h-8 px-3 rounded-lg bg-muted/40 border border-primary/30 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20" autoFocus />
-                    ) : (
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                          <User className="w-3.5 h-3.5 text-primary" />
-                        </div>
-                        <span className="text-sm font-medium text-foreground">{emp.fullName}</span>
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {editId === emp.id ? (
-                      <input value={editData.fingerprintId} onChange={(e) => setEditData({ ...editData, fingerprintId: e.target.value })}
-                        className="w-full h-8 px-3 rounded-lg bg-muted/40 border border-primary/30 text-sm text-center focus:outline-none focus:ring-2 focus:ring-primary/20" />
-                    ) : (
-                      <span className="font-mono text-xs font-bold text-primary">{emp.fingerprintId || "-"}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {editId === emp.id ? (
-                      <input value={editData.nationalId} onChange={(e) => setEditData({ ...editData, nationalId: e.target.value })}
-                        className="w-full h-8 px-3 rounded-lg bg-muted/40 border border-primary/30 text-sm text-center focus:outline-none focus:ring-2 focus:ring-primary/20" />
-                    ) : (
-                      <span className="font-mono text-xs">{emp.nationalId || "-"}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {editId === emp.id ? (
-                      <input value={editData.phone} onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
-                        className="w-full h-8 px-3 rounded-lg bg-muted/40 border border-primary/30 text-sm text-center focus:outline-none focus:ring-2 focus:ring-primary/20"
-                        onKeyDown={(e) => e.key === "Enter" && handleEdit(emp.id)} />
-                    ) : (
-                      <span className="font-mono text-xs">{emp.phone || "-"}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {editId === emp.id ? (
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => handleEdit(emp.id)} className="w-7 h-7 rounded-md bg-primary/10 hover:bg-primary/20 flex items-center justify-center transition-colors">
-                          <Save className="w-3.5 h-3.5 text-primary" />
-                        </button>
-                        <button onClick={() => setEditId(null)} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors">
-                          <X className="w-3.5 h-3.5 text-muted-foreground" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setShowView(emp)} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors">
-                          <Eye className="w-3.5 h-3.5 text-muted-foreground" />
-                        </button>
-                        <button onClick={() => startEdit(emp)} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors">
-                          <Edit className="w-3.5 h-3.5 text-muted-foreground" />
-                        </button>
-                        <button onClick={() => handleDelete(emp.id)} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors">
-                          <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* عرض تفاصيل الموظف */}
-      <Dialog open={!!showView} onOpenChange={() => setShowView(null)}>
-        <DialogContent className="max-w-lg" dir="rtl">
-          <DialogHeader><DialogTitle className="text-lg font-bold">تفاصيل الموظف</DialogTitle></DialogHeader>
-          {showView && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-4 p-4 bg-muted/30 rounded-xl">
-                <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center">
-                  <User className="w-7 h-7 text-primary" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-foreground text-lg">{showView.fullName}</h3>
-                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                    <Fingerprint className="w-3 h-3" />
-                    بصمة: {showView.fingerprintId || "-"}
-                  </p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-muted/20 rounded-lg">
-                  <span className="text-[11px] font-bold text-muted-foreground block mb-1">اسم الموظف</span>
-                  <span className="text-sm font-medium text-foreground">{showView.fullName}</span>
-                </div>
-                <div className="p-3 bg-muted/20 rounded-lg">
-                  <span className="text-[11px] font-bold text-muted-foreground block mb-1">رقم البصمة</span>
-                  <span className="text-sm font-medium text-foreground">{showView.fingerprintId || "-"}</span>
-                </div>
-                <div className="p-3 bg-muted/20 rounded-lg">
-                  <span className="text-[11px] font-bold text-muted-foreground block mb-1">رقم الهوية</span>
-                  <span className="text-sm font-medium text-foreground">{showView.nationalId || "-"}</span>
-                </div>
-                <div className="p-3 bg-muted/20 rounded-lg">
-                  <span className="text-[11px] font-bold text-muted-foreground block mb-1">رقم الهاتف</span>
-                  <span className="text-sm font-medium text-foreground">{showView.phone || "-"}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* إضافة موظف جديد */}
-      <Dialog open={showAdd} onOpenChange={setShowAdd}>
-        <DialogContent className="max-w-md" dir="rtl">
-          <DialogHeader><DialogTitle className="text-lg font-bold">إضافة موظف جديد</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">اسم الموظف <span className="text-red-500">*</span></label>
-              <input value={newData.fullName} onChange={(e) => setNewData({ ...newData, fullName: e.target.value })}
-                placeholder="أدخل اسم الموظف الكامل"
-                className="w-full h-10 px-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
-                autoFocus />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">رقم البصمة</label>
-              <input value={newData.fingerprintId} onChange={(e) => setNewData({ ...newData, fingerprintId: e.target.value })}
-                placeholder="أدخل رقم البصمة"
-                className="w-full h-10 px-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">رقم الهوية</label>
-              <input value={newData.nationalId} onChange={(e) => setNewData({ ...newData, nationalId: e.target.value })}
-                placeholder="أدخل رقم الهوية"
-                className="w-full h-10 px-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">رقم الهاتف</label>
-              <input value={newData.phone} onChange={(e) => setNewData({ ...newData, phone: e.target.value })}
-                placeholder="05XXXXXXXX" type="tel"
-                className="w-full h-10 px-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all" />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => { setShowAdd(false); setNewData({ fullName: "", fingerprintId: "", nationalId: "", phone: "" }); }}>إلغاء</Button>
-              <Button onClick={handleAdd} disabled={createMut.isPending}>
-                {createMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "حفظ الموظف"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+  const filtered = employees.filter((e) => !searchQuery.trim() || `${e.fullName} ${e.departmentName || ""} ${e.locationName || ""} ${e.fingerprintId || ""}`.toLowerCase().includes(searchQuery.toLowerCase()));
+  const payload = (d: typeof empty) => ({ fullName: d.fullName.trim(), departmentId: Number(d.departmentId), fingerprintId: d.fingerprintId.trim() || null, nationalId: d.nationalId.trim() || null, phone: d.phone.trim() || null });
+  const handleAdd = () => { if (!newData.fullName.trim() || !newData.departmentId) return toast.error("يرجى إدخال اسم الموظف واختيار القسم"); createMut.mutate(payload(newData), { onSuccess: () => { setNewData(empty); setShowAdd(false); } }); };
+  const handleEdit = (id: number) => { if (!editData.fullName.trim() || !editData.departmentId) return toast.error("يرجى إدخال اسم الموظف واختيار القسم"); updateMut.mutate({ id, ...payload(editData) }, { onSuccess: () => setEditId(null) }); };
+  if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>;
+  return <div className="space-y-4"><div className="flex items-center justify-between"><div><h3 className="text-sm font-bold">الموظفين</h3><p className="text-xs text-muted-foreground">الموقع يُحدد تلقائياً من القسم</p></div><Button size="sm" onClick={() => setShowAdd(true)}><Plus className="w-3.5 h-3.5 ml-1" />إضافة موظف</Button></div>
+    <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="بحث..." className="w-full h-9 px-3 rounded-lg border bg-muted/30" />
+    <div className="border border-border rounded-xl overflow-hidden"><table className="w-full"><thead><tr className="bg-muted/30"><th className="text-right text-xs px-3 py-3">الموظف</th><th className="text-right text-xs px-3 py-3">القسم</th><th className="text-right text-xs px-3 py-3">الموقع</th><th className="text-center text-xs px-3 py-3">البصمة</th><th className="text-center text-xs px-3 py-3">الإجراءات</th></tr></thead><tbody>{filtered.map((emp) => <tr key={emp.id} className="border-t border-border/50"><td className="px-3 py-3">{editId === emp.id ? <input value={editData.fullName} onChange={(e) => setEditData({ ...editData, fullName: e.target.value })} className="h-9 px-2 border rounded-lg" /> : emp.fullName}</td><td className="px-3 py-3">{editId === emp.id ? <Select value={editData.departmentId} onValueChange={(v) => setEditData({ ...editData, departmentId: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{departments.map((d) => <SelectItem key={d.id} value={String(d.id)}>{d.name} - {d.locationName || "بدون موقع"}</SelectItem>)}</SelectContent></Select> : emp.departmentName || "غير محدد"}</td><td className="px-3 py-3">{emp.locationName || "غير محدد"}</td><td className="px-3 py-3 text-center">{emp.fingerprintId || "-"}</td><td className="px-3 py-3"><div className="flex justify-center gap-1">{editId === emp.id ? <><button onClick={() => handleEdit(emp.id)}><Save className="w-4 h-4 text-primary" /></button><button onClick={() => setEditId(null)}><X className="w-4 h-4" /></button></> : <><button onClick={() => { setEditId(emp.id); setEditData({ fullName: emp.fullName, departmentId: emp.departmentId ? String(emp.departmentId) : "", fingerprintId: emp.fingerprintId || "", nationalId: emp.nationalId || "", phone: emp.phone || "" }); }}><Edit className="w-4 h-4" /></button><button onClick={() => deleteMut.mutate({ id: emp.id })}><Trash2 className="w-4 h-4 text-red-400" /></button></>}</div></td></tr>)}</tbody></table></div>
+    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-md" dir="rtl"><DialogHeader><DialogTitle>إضافة موظف جديد</DialogTitle></DialogHeader><div className="space-y-3"><input value={newData.fullName} onChange={(e) => setNewData({ ...newData, fullName: e.target.value })} placeholder="اسم الموظف" className="w-full h-10 px-3 border rounded-lg" /><Select value={newData.departmentId} onValueChange={(v) => setNewData({ ...newData, departmentId: v })}><SelectTrigger><SelectValue placeholder="اختر القسم" /></SelectTrigger><SelectContent>{departments.map((d) => <SelectItem key={d.id} value={String(d.id)}>{d.name} - {d.locationName || "بدون موقع"}</SelectItem>)}</SelectContent></Select><input value={newData.fingerprintId} onChange={(e) => setNewData({ ...newData, fingerprintId: e.target.value })} placeholder="رقم البصمة" className="w-full h-10 px-3 border rounded-lg" /><input value={newData.nationalId} onChange={(e) => setNewData({ ...newData, nationalId: e.target.value })} placeholder="رقم الهوية" className="w-full h-10 px-3 border rounded-lg" /><input value={newData.phone} onChange={(e) => setNewData({ ...newData, phone: e.target.value })} placeholder="رقم الهاتف" className="w-full h-10 px-3 border rounded-lg" /><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setShowAdd(false)}>إلغاء</Button><Button onClick={handleAdd}>حفظ الموظف</Button></div></div></DialogContent></Dialog>
+  </div>;
 }
 
 // ===== تبويب أنواع الاستبعاد =====

@@ -3,7 +3,7 @@
  */
 import { z } from "zod";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { protectedProcedure, router } from "../_core/trpc";
+import { operatorProcedure, deleteProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   assets,
@@ -21,17 +21,34 @@ import {
 import { logAuditAction } from "../security";
 import { TRPCError } from "@trpc/server";
 
+
+async function resolveEmployeeHierarchy(db: any, employeeId: number) {
+  const [row] = await db.select({
+    employeeId: employees.id,
+    departmentId: employees.departmentId,
+    departmentName: departments.name,
+    locationId: departments.locationId,
+    locationName: locations.name,
+  }).from(employees)
+    .leftJoin(departments, eq(employees.departmentId, departments.id))
+    .leftJoin(locations, eq(departments.locationId, locations.id))
+    .where(eq(employees.id, employeeId)).limit(1);
+  if (!row) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير موجود" });
+  if (!row.departmentId || !row.locationId) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير مرتبط بقسم وموقع صالحين" });
+  return row;
+}
+
 // =============================================
 // النقل
 // =============================================
 const transfersRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select().from(assetTransfers).orderBy(desc(assetTransfers.createdAt));
   }),
 
-  getById: protectedProcedure
+  getById: operatorProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -59,7 +76,7 @@ const transfersRouter = router({
       return { ...transfer, entityName, fromEmployeeName, toEmployeeName };
     }),
 
-  update: protectedProcedure
+  update: operatorProcedure
     .input(z.object({
       id: z.number(),
       fromEmployeeId: z.number().optional().nullable(),
@@ -88,7 +105,7 @@ const transfersRouter = router({
       return { success: true };
     }),
 
-  create: protectedProcedure
+  create: operatorProcedure
     .input(z.object({
       entityType: z.enum(["asset", "custody"]),
       entityId: z.number(),
@@ -112,16 +129,22 @@ const transfersRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const destination = await resolveEmployeeHierarchy(db, input.toEmployeeId);
 
       if (input.movementType === "total") {
         // نقل كلي - نقل جميع عناصر الموظف
         const table = input.entityType === "asset" ? assets : custodyItems;
         const assignedToCol = input.entityType === "asset" ? assets.assignedTo : custodyItems.assignedTo;
-        
-        // تحديث الموظف المسؤول
+        let affectedEntityIds: number[] = [];
+
+        // نحفظ معرفات كل العناصر المتأثرة لضمان بقاء سجل الحركة قابلاً للتحقق لاحقاً.
         if (input.fromEmployeeId) {
+          const affected = await db.select({ id: table.id }).from(table).where(eq(assignedToCol, input.fromEmployeeId));
+          affectedEntityIds = affected.map((row: any) => Number(row.id));
           await db.update(table).set({
             assignedTo: input.toEmployeeId,
+            departmentId: destination.departmentId,
+            locationId: destination.locationId,
           }).where(eq(assignedToCol, input.fromEmployeeId));
         }
 
@@ -133,9 +156,9 @@ const transfersRouter = router({
           fromEmployeeId: input.fromEmployeeId || null,
           toEmployeeId: input.toEmployeeId,
           fromDepartment: input.fromDepartment || null,
-          toDepartment: input.toDepartment || null,
+          toDepartment: destination.departmentName || input.toDepartment || null,
           fromLocation: input.fromLocation || null,
-          toLocation: input.toLocation || null,
+          toLocation: destination.locationName || input.toLocation || null,
           quantity: input.quantity,
           assetValue: input.assetValue || null,
           notes: input.notes || null,
@@ -147,7 +170,7 @@ const transfersRouter = router({
           recordId: Number(result[0].insertId),
           actionType: "TRANSFER",
           actionDescription: `نقل كلي ${input.entityType === "asset" ? "أصول" : "عهد"} من موظف #${input.fromEmployeeId} إلى موظف #${input.toEmployeeId}`,
-          newData: input,
+          newData: { ...input, affectedEntityIds },
           performedBy: ctx.user.id,
           performedByName: ctx.user.name || undefined,
           ipAddress: ctx.req.ip || undefined,
@@ -163,6 +186,8 @@ const transfersRouter = router({
           const table = item.entityType === "asset" ? assets : custodyItems;
           await db.update(table).set({
             assignedTo: input.toEmployeeId,
+            departmentId: destination.departmentId,
+            locationId: destination.locationId,
           }).where(eq(table.id, item.entityId));
         }
 
@@ -173,9 +198,9 @@ const transfersRouter = router({
           fromEmployeeId: input.fromEmployeeId || null,
           toEmployeeId: input.toEmployeeId,
           fromDepartment: input.fromDepartment || null,
-          toDepartment: input.toDepartment || null,
+          toDepartment: destination.departmentName || input.toDepartment || null,
           fromLocation: input.fromLocation || null,
-          toLocation: input.toLocation || null,
+          toLocation: destination.locationName || input.toLocation || null,
           quantity: items.length,
           assetValue: input.assetValue || null,
           notes: input.notes || null,
@@ -203,13 +228,13 @@ const transfersRouter = router({
 // الاستبعاد
 // =============================================
 const exclusionsRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select().from(assetExclusions).orderBy(desc(assetExclusions.createdAt));
   }),
 
-  getNextCode: protectedProcedure.query(async () => {
+  getNextCode: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const year = new Date().getFullYear();
@@ -218,7 +243,7 @@ const exclusionsRouter = router({
     return { code: `EXC-${year}-${String(nextSeq).padStart(4, "0")}`, seq: nextSeq };
   }),
 
-  create: protectedProcedure
+  create: operatorProcedure
     .input(z.object({
       entityType: z.enum(["asset", "custody"]),
       entityId: z.number(),
@@ -310,13 +335,13 @@ const exclusionsRouter = router({
 // براءة الذمة
 // =============================================
 const clearanceRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select().from(clearanceRecords).orderBy(desc(clearanceRecords.createdAt));
   }),
 
-  getNextCode: protectedProcedure.query(async () => {
+  getNextCode: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [result] = await db.select({ count: sql<number>`COUNT(*)` }).from(clearanceRecords);
@@ -324,7 +349,7 @@ const clearanceRouter = router({
     return { code: `CLR-${new Date().getFullYear()}-${String(nextNum).padStart(4, "0")}` };
   }),
 
-  create: protectedProcedure
+  create: operatorProcedure
     .input(z.object({
       clearanceCode: z.string(),
       employeeId: z.number(),
@@ -368,7 +393,7 @@ const clearanceRouter = router({
     }),
 
   // الحصول على بيانات براءة ذمة واحدة مع عهد وأصول الموظف
-  getById: protectedProcedure
+  getById: operatorProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -418,7 +443,7 @@ const clearanceRouter = router({
     }),
 
   // الحصول على عناصر موظف (أصول + عهد)
-  getEmployeeItems: protectedProcedure
+  getEmployeeItems: operatorProcedure
     .input(z.object({ employeeId: z.number() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -460,7 +485,7 @@ const clearanceRouter = router({
     }),
 
   // حذف براءة ذمة
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();

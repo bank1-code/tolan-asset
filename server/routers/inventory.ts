@@ -3,7 +3,7 @@
  */
 import { z } from "zod";
 import { eq, like, and, or, sql, desc } from "drizzle-orm";
-import { protectedProcedure, router } from "../_core/trpc";
+import { protectedProcedure, operatorProcedure, deleteProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   assets,
@@ -12,6 +12,12 @@ import {
   departments,
   locations,
   archiveDocuments,
+  assetTransfers,
+  assetExclusions,
+  assetDocuments,
+  custodyDocuments,
+  inventorySessions,
+  auditLog,
 } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
 import { TRPCError } from "@trpc/server";
@@ -89,6 +95,71 @@ async function upsertArchiveDocument(params: {
   return { id: Number(result[0].insertId), updated: false };
 }
 
+
+async function validateAssignment(db: any, locationId?: number | null, departmentId?: number | null, employeeId?: number | null) {
+  if (!locationId && !departmentId && !employeeId) return;
+  if (!locationId || !departmentId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "يجب اختيار الموقع والقسم معاً" });
+  }
+  const [department] = await db.select({ id: departments.id, locationId: departments.locationId })
+    .from(departments).where(eq(departments.id, departmentId)).limit(1);
+  if (!department || department.locationId !== locationId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد لا يتبع الموقع المختار" });
+  }
+  if (employeeId) {
+    const [employee] = await db.select({ id: employees.id, departmentId: employees.departmentId })
+      .from(employees).where(eq(employees.id, employeeId)).limit(1);
+    if (!employee || employee.departmentId !== departmentId) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المحدد لا يتبع القسم المختار" });
+    }
+  }
+}
+
+async function assertNoMovement(db: any, entityType: "asset" | "custody", entityId: number) {
+  const [transfer] = await db.select({ id: assetTransfers.id }).from(assetTransfers)
+    .where(and(eq(assetTransfers.entityType, entityType), eq(assetTransfers.entityId, entityId))).limit(1);
+  const [exclusion] = await db.select({ id: assetExclusions.id }).from(assetExclusions)
+    .where(and(eq(assetExclusions.entityType, entityType), eq(assetExclusions.entityId, entityId))).limit(1);
+  const sessions = await db.select({ items: inventorySessions.items }).from(inventorySessions)
+    .where(eq(inventorySessions.sessionType, entityType === "asset" ? "assets" : "custody"));
+  const inventoried = sessions.some((session: any) => {
+    let items = session.items;
+    if (typeof items === "string") {
+      try { items = JSON.parse(items); } catch { items = []; }
+    }
+    return Array.isArray(items) && items.some((item: any) => Number(item?.id) === entityId);
+  });
+
+  // النقل الكلي قد يشمل عدة عناصر في سجل نقل واحد؛ سجل التدقيق يحتفظ بكل المعرفات المتأثرة.
+  const transferAudits = await db.select({ newData: auditLog.newData }).from(auditLog)
+    .where(and(eq(auditLog.tableName, "asset_transfers"), eq(auditLog.actionType, "TRANSFER")));
+  const transferredViaAudit = transferAudits.some((entry: any) => {
+    let data = entry.newData;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch { return false; }
+    }
+    if (!data || typeof data !== "object") return false;
+    if (data.entityType === entityType && Number(data.entityId) === entityId) return true;
+    if (Array.isArray(data.items) && data.items.some((item: any) => item?.entityType === entityType && Number(item?.entityId) === entityId)) return true;
+    return data.entityType === entityType && Array.isArray(data.affectedEntityIds) && data.affectedEntityIds.some((id: any) => Number(id) === entityId);
+  });
+
+  const inventoryAudits = await db.select({ newData: auditLog.newData }).from(auditLog)
+    .where(and(eq(auditLog.tableName, "inventory_sessions"), eq(auditLog.actionType, "INVENTORY")));
+  const inventoriedViaAudit = inventoryAudits.some((entry: any) => {
+    let data = entry.newData;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch { return false; }
+    }
+    const expectedType = entityType === "asset" ? "assets" : "custody";
+    return data?.sessionType === expectedType && Array.isArray(data?.items) && data.items.some((item: any) => Number(item?.id) === entityId);
+  });
+
+  if (transfer || transferredViaAudit || exclusion || inventoried || inventoriedViaAudit) {
+    throw new TRPCError({ code: "CONFLICT", message: `لا يمكن حذف ${entityType === "asset" ? "الأصل" : "العهدة"} لوجود حركات مسجلة عليه` });
+  }
+}
+
 // =============================================
 // الأصول
 // =============================================
@@ -100,7 +171,7 @@ const assetsRouter = router({
       locationId: z.number().optional(),
       status: z.string().optional(),
     }).optional())
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -116,6 +187,10 @@ const assetsRouter = router({
       if (input?.departmentId) conditions.push(eq(assets.departmentId, input.departmentId));
       if (input?.locationId) conditions.push(eq(assets.locationId, input.locationId));
       if (input?.status) conditions.push(eq(assets.status, input.status));
+      if (ctx.user.role === "employee") {
+        if (!ctx.user.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "الحساب غير مرتبط بسجل موظف" });
+        conditions.push(eq(assets.assignedTo, ctx.user.employeeId));
+      }
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -153,7 +228,7 @@ const assetsRouter = router({
 
   getById: protectedProcedure
     .input(z.object({ id: z.number() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [row] = await db
@@ -181,22 +256,24 @@ const assetsRouter = router({
         .leftJoin(employees, eq(assets.assignedTo, employees.id))
         .leftJoin(departments, eq(assets.departmentId, departments.id))
         .leftJoin(locations, eq(assets.locationId, locations.id))
-        .where(eq(assets.id, input.id))
+        .where(ctx.user.role === "employee"
+          ? and(eq(assets.id, input.id), eq(assets.assignedTo, ctx.user.employeeId ?? -1))
+          : eq(assets.id, input.id))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "الأصل غير موجود" });
       return row;
     }),
 
-  create: protectedProcedure
+  create: operatorProcedure
     .input(z.object({
       assetName: z.string().min(1).max(500),
       assetCode: z.string().max(100).optional().nullable(),
       quantity: z.number().min(1).default(1),
       assetValue: z.string().optional().nullable(),
       condition: z.string().max(50).optional().nullable(),
-      assignedTo: z.number().optional().nullable(),
-      departmentId: z.number().optional().nullable(),
-      locationId: z.number().optional().nullable(),
+      assignedTo: z.number(),
+      departmentId: z.number(),
+      locationId: z.number(),
       notes: z.string().optional().nullable(),
       assetImagePath: z.string().optional().nullable(),
       invoiceImagePath: z.string().optional().nullable(),
@@ -204,6 +281,7 @@ const assetsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await validateAssignment(db, input.locationId, input.departmentId, input.assignedTo);
       const result = await db.insert(assets).values({
         assetName: input.assetName,
         assetCode: input.assetCode || null,
@@ -256,7 +334,7 @@ const assetsRouter = router({
       return { id: insertId };
     }),
 
-  update: protectedProcedure
+  update: operatorProcedure
     .input(z.object({
       id: z.number(),
       assetName: z.string().min(1).max(500),
@@ -264,9 +342,9 @@ const assetsRouter = router({
       quantity: z.number().min(1).default(1),
       assetValue: z.string().optional().nullable(),
       condition: z.string().max(50).optional().nullable(),
-      assignedTo: z.number().optional().nullable(),
-      departmentId: z.number().optional().nullable(),
-      locationId: z.number().optional().nullable(),
+      assignedTo: z.number(),
+      departmentId: z.number(),
+      locationId: z.number(),
       status: z.string().max(30).optional(),
       notes: z.string().optional().nullable(),
       assetImagePath: z.string().optional().nullable(),
@@ -277,6 +355,7 @@ const assetsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(assets).where(eq(assets.id, input.id)).limit(1);
       if (!old) throw new TRPCError({ code: "NOT_FOUND" });
+      await validateAssignment(db, input.locationId, input.departmentId, input.assignedTo);
       const { id, ...updateData } = input;
       await db.update(assets).set({
         assetName: updateData.assetName,
@@ -344,13 +423,15 @@ const assetsRouter = router({
       return { success: true };
     }),
 
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(assets).where(eq(assets.id, input.id)).limit(1);
       if (!old) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertNoMovement(db, "asset", input.id);
+      await db.delete(assetDocuments).where(eq(assetDocuments.assetId, input.id));
       await db.delete(assets).where(eq(assets.id, input.id));
       await logAuditAction({
         tableName: "assets",
@@ -366,7 +447,7 @@ const assetsRouter = router({
       return { success: true };
     }),
 
-  stats: protectedProcedure.query(async () => {
+  stats: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [result] = await db
@@ -375,7 +456,8 @@ const assetsRouter = router({
         totalValue: sql<string>`COALESCE(SUM(CAST(${assets.assetValue} AS DECIMAL(12,2)) * ${assets.quantity}), 0)`,
         activeCount: sql<number>`SUM(CASE WHEN ${assets.status} = 'ACTIVE' THEN 1 ELSE 0 END)`,
       })
-      .from(assets);
+      .from(assets)
+      .where(ctx.user.role === "employee" ? eq(assets.assignedTo, ctx.user.employeeId ?? -1) : undefined);
     return result;
   }),
 });
@@ -391,7 +473,7 @@ const custodyRouter = router({
       locationId: z.number().optional(),
       status: z.string().optional(),
     }).optional())
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -407,6 +489,10 @@ const custodyRouter = router({
       if (input?.departmentId) conditions.push(eq(custodyItems.departmentId, input.departmentId));
       if (input?.locationId) conditions.push(eq(custodyItems.locationId, input.locationId));
       if (input?.status) conditions.push(eq(custodyItems.status, input.status));
+      if (ctx.user.role === "employee") {
+        if (!ctx.user.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "الحساب غير مرتبط بسجل موظف" });
+        conditions.push(eq(custodyItems.assignedTo, ctx.user.employeeId));
+      }
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -444,7 +530,7 @@ const custodyRouter = router({
 
   getById: protectedProcedure
     .input(z.object({ id: z.number() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [row] = await db
@@ -472,22 +558,24 @@ const custodyRouter = router({
         .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
         .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
         .leftJoin(locations, eq(custodyItems.locationId, locations.id))
-        .where(eq(custodyItems.id, input.id))
+        .where(ctx.user.role === "employee"
+          ? and(eq(custodyItems.id, input.id), eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1))
+          : eq(custodyItems.id, input.id))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "العهدة غير موجودة" });
       return row;
     }),
 
-  create: protectedProcedure
+  create: operatorProcedure
     .input(z.object({
       name: z.string().min(1).max(500),
       code: z.string().max(100).optional().nullable(),
       quantity: z.number().min(1).default(1),
       assetValue: z.string().optional().nullable(),
       condition: z.string().max(50).optional().nullable(),
-      assignedTo: z.number().optional().nullable(),
-      departmentId: z.number().optional().nullable(),
-      locationId: z.number().optional().nullable(),
+      assignedTo: z.number(),
+      departmentId: z.number(),
+      locationId: z.number(),
       notes: z.string().optional().nullable(),
       assetImagePath: z.string().optional().nullable(),
       invoiceImagePath: z.string().optional().nullable(),
@@ -495,6 +583,7 @@ const custodyRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await validateAssignment(db, input.locationId, input.departmentId, input.assignedTo);
       const result = await db.insert(custodyItems).values({
         name: input.name,
         code: input.code || null,
@@ -547,7 +636,7 @@ const custodyRouter = router({
       return { id: insertId };
     }),
 
-  update: protectedProcedure
+  update: operatorProcedure
     .input(z.object({
       id: z.number(),
       name: z.string().min(1).max(500),
@@ -555,9 +644,9 @@ const custodyRouter = router({
       quantity: z.number().min(1).default(1),
       assetValue: z.string().optional().nullable(),
       condition: z.string().max(50).optional().nullable(),
-      assignedTo: z.number().optional().nullable(),
-      departmentId: z.number().optional().nullable(),
-      locationId: z.number().optional().nullable(),
+      assignedTo: z.number(),
+      departmentId: z.number(),
+      locationId: z.number(),
       status: z.string().max(30).optional(),
       notes: z.string().optional().nullable(),
       assetImagePath: z.string().optional().nullable(),
@@ -568,6 +657,7 @@ const custodyRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(custodyItems).where(eq(custodyItems.id, input.id)).limit(1);
       if (!old) throw new TRPCError({ code: "NOT_FOUND" });
+      await validateAssignment(db, input.locationId, input.departmentId, input.assignedTo);
       const { id, ...updateData } = input;
       await db.update(custodyItems).set({
         name: updateData.name,
@@ -635,13 +725,15 @@ const custodyRouter = router({
       return { success: true };
     }),
 
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(custodyItems).where(eq(custodyItems.id, input.id)).limit(1);
       if (!old) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertNoMovement(db, "custody", input.id);
+      await db.delete(custodyDocuments).where(eq(custodyDocuments.custodyId, input.id));
       await db.delete(custodyItems).where(eq(custodyItems.id, input.id));
       await logAuditAction({
         tableName: "custody_items",
@@ -657,7 +749,7 @@ const custodyRouter = router({
       return { success: true };
     }),
 
-  stats: protectedProcedure.query(async () => {
+  stats: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [result] = await db
@@ -666,7 +758,8 @@ const custodyRouter = router({
         totalValue: sql<string>`COALESCE(SUM(CAST(${custodyItems.assetValue} AS DECIMAL(12,2)) * ${custodyItems.quantity}), 0)`,
         activeCount: sql<number>`SUM(CASE WHEN ${custodyItems.status} = 'ACTIVE' THEN 1 ELSE 0 END)`,
       })
-      .from(custodyItems);
+      .from(custodyItems)
+      .where(ctx.user.role === "employee" ? eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1) : undefined);
     return result;
   }),
 });

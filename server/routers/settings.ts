@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
-import { protectedProcedure, adminProcedure, router } from "../_core/trpc";
+import { protectedProcedure, operatorProcedure, adminProcedure, deleteProcedure, ownerProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   departments,
@@ -20,48 +20,55 @@ import { TRPCError } from "@trpc/server";
 // الأقسام
 // =============================================
 const departmentsRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
-    return db.select().from(departments).orderBy(departments.name);
+    return db.select({
+      id: departments.id, name: departments.name, locationId: departments.locationId,
+      locationName: locations.name, createdAt: departments.createdAt, updatedAt: departments.updatedAt,
+    }).from(departments).leftJoin(locations, eq(departments.locationId, locations.id)).orderBy(departments.name);
   }),
 
-  create: protectedProcedure
-    .input(z.object({ name: z.string().min(1).max(255).transform(s => s.trim()).refine(s => s.length > 0, { message: "الاسم مطلوب" }) }))
+  create: adminProcedure
+    .input(z.object({ name: z.string().min(1).max(255).transform(s => s.trim()).refine(s => s.length > 0, { message: "الاسم مطلوب" }), locationId: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const result = await db.insert(departments).values({ name: input.name });
+      const [location] = await db.select({ id: locations.id }).from(locations).where(eq(locations.id, input.locationId)).limit(1);
+      if (!location) throw new TRPCError({ code: "BAD_REQUEST", message: "الموقع المحدد غير موجود" });
+      const result = await db.insert(departments).values({ name: input.name, locationId: input.locationId });
       const insertId = Number(result[0].insertId);
       await logAuditAction({
         tableName: "departments",
         recordId: insertId,
         actionType: "CREATE",
         actionDescription: `إضافة قسم: ${input.name}`,
-        newData: { name: input.name },
+        newData: { name: input.name, locationId: input.locationId },
         performedBy: ctx.user.id,
         performedByName: ctx.user.name || undefined,
         ipAddress: ctx.req.ip || undefined,
         userAgent: ctx.req.headers["user-agent"] || undefined,
       });
-      return { id: insertId, name: input.name };
+      return { id: insertId, name: input.name, locationId: input.locationId };
     }),
 
-  update: protectedProcedure
-    .input(z.object({ id: z.number(), name: z.string().min(1).max(255) }))
+  update: adminProcedure
+    .input(z.object({ id: z.number(), name: z.string().min(1).max(255), locationId: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(departments).where(eq(departments.id, input.id)).limit(1);
-      await db.update(departments).set({ name: input.name }).where(eq(departments.id, input.id));
+      const [location] = await db.select({ id: locations.id }).from(locations).where(eq(locations.id, input.locationId)).limit(1);
+      if (!location) throw new TRPCError({ code: "BAD_REQUEST", message: "الموقع المحدد غير موجود" });
+      await db.update(departments).set({ name: input.name, locationId: input.locationId }).where(eq(departments.id, input.id));
       await logAuditAction({
         tableName: "departments",
         recordId: input.id,
         actionType: "UPDATE",
         actionDescription: `تعديل قسم: ${old?.name} → ${input.name}`,
         oldData: old,
-        newData: { name: input.name },
-        changedFields: ["name"],
+        newData: { name: input.name, locationId: input.locationId },
+        changedFields: ["name", "locationId"],
         performedBy: ctx.user.id,
         performedByName: ctx.user.name || undefined,
         ipAddress: ctx.req.ip || undefined,
@@ -70,7 +77,7 @@ const departmentsRouter = router({
       return { success: true };
     }),
 
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -96,13 +103,13 @@ const departmentsRouter = router({
 // المواقع
 // =============================================
 const locationsRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select().from(locations).orderBy(locations.name);
   }),
 
-  create: protectedProcedure
+  create: adminProcedure
     .input(z.object({ name: z.string().min(1).max(255).transform(s => s.trim()).refine(s => s.length > 0, { message: "الاسم مطلوب" }) }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -123,7 +130,7 @@ const locationsRouter = router({
       return { id: insertId, name: input.name };
     }),
 
-  update: protectedProcedure
+  update: adminProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(255) }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -146,7 +153,7 @@ const locationsRouter = router({
       return { success: true };
     }),
 
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -172,15 +179,24 @@ const locationsRouter = router({
 // الموظفين
 // =============================================
 const employeesRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    return db.select().from(employees).orderBy(employees.fullName);
+    return db.select({
+      id: employees.id, fullName: employees.fullName, departmentId: employees.departmentId,
+      departmentName: departments.name, locationId: departments.locationId, locationName: locations.name,
+      fingerprintId: employees.fingerprintId, nationalId: employees.nationalId, phone: employees.phone,
+      createdAt: employees.createdAt, updatedAt: employees.updatedAt,
+    }).from(employees)
+      .leftJoin(departments, eq(employees.departmentId, departments.id))
+      .leftJoin(locations, eq(departments.locationId, locations.id))
+      .orderBy(employees.fullName);
   }),
 
-  create: protectedProcedure
+  create: adminProcedure
     .input(z.object({
       fullName: z.string().min(1).max(255),
+      departmentId: z.number(),
       fingerprintId: z.string().max(100).optional().nullable(),
       nationalId: z.string().max(100).optional().nullable(),
       phone: z.string().max(50).optional().nullable(),
@@ -188,8 +204,11 @@ const employeesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [department] = await db.select({ id: departments.id }).from(departments).where(eq(departments.id, input.departmentId)).limit(1);
+      if (!department) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد غير موجود" });
       const result = await db.insert(employees).values({
         fullName: input.fullName,
+        departmentId: input.departmentId,
         fingerprintId: input.fingerprintId || null,
         nationalId: input.nationalId || null,
         phone: input.phone || null,
@@ -209,10 +228,11 @@ const employeesRouter = router({
       return { id: insertId, ...input };
     }),
 
-  update: protectedProcedure
+  update: adminProcedure
     .input(z.object({
       id: z.number(),
       fullName: z.string().min(1).max(255),
+      departmentId: z.number(),
       fingerprintId: z.string().max(100).optional().nullable(),
       nationalId: z.string().max(100).optional().nullable(),
       phone: z.string().max(50).optional().nullable(),
@@ -221,8 +241,11 @@ const employeesRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(employees).where(eq(employees.id, input.id)).limit(1);
+      const [department] = await db.select({ id: departments.id }).from(departments).where(eq(departments.id, input.departmentId)).limit(1);
+      if (!department) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد غير موجود" });
       await db.update(employees).set({
         fullName: input.fullName,
+        departmentId: input.departmentId,
         fingerprintId: input.fingerprintId || null,
         nationalId: input.nationalId || null,
         phone: input.phone || null,
@@ -230,6 +253,7 @@ const employeesRouter = router({
       // تحديد الحقول المتغيرة
       const changedFields: string[] = [];
       if (old?.fullName !== input.fullName) changedFields.push('fullName');
+      if (old?.departmentId !== input.departmentId) changedFields.push('departmentId');
       if (old?.fingerprintId !== (input.fingerprintId || null)) changedFields.push('fingerprintId');
       if (old?.nationalId !== (input.nationalId || null)) changedFields.push('nationalId');
       if (old?.phone !== (input.phone || null)) changedFields.push('phone');
@@ -250,7 +274,7 @@ const employeesRouter = router({
       return { success: true };
     }),
 
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -276,13 +300,13 @@ const employeesRouter = router({
 // أنواع الاستبعاد
 // =============================================
 const exclusionTypesRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select().from(exclusionTypes).orderBy(exclusionTypes.name);
   }),
 
-  create: protectedProcedure
+  create: adminProcedure
     .input(z.object({ name: z.string().min(1).max(200) }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -303,7 +327,7 @@ const exclusionTypesRouter = router({
       return { id: insertId, name: input.name };
     }),
 
-  delete: protectedProcedure
+  delete: deleteProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -362,7 +386,7 @@ const brandingRouter = router({
     };
   }),
 
-  update: adminProcedure
+  update: ownerProcedure
     .input(z.object({
       systemName: z.string().trim().min(1).max(150),
       systemSubtitle: z.string().trim().max(200),

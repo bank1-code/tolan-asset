@@ -2,7 +2,7 @@
  * Upload Router - رفع الصور مع تحويل تلقائي إلى WebP
  */
 import { z } from "zod";
-import { protectedProcedure, router } from "../_core/trpc";
+import { operatorProcedure, router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import sharp from "sharp";
 import { TRPCError } from "@trpc/server";
@@ -41,7 +41,7 @@ export const uploadRouter = router({
    * رفع صورة واحدة - تحويل إلى WebP وحفظ في S3
    * يُرجع رابط الصورة المحفوظة
    */
-  image: protectedProcedure
+  image: operatorProcedure
     .input(
       z.object({
         base64: z.string().min(1),
@@ -50,7 +50,7 @@ export const uploadRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      if (input.category === "branding" && ctx.user.role !== "admin") {
+      if (input.category === "branding" && ctx.user.role !== "owner") {
         throw new TRPCError({ code: "FORBIDDEN", message: "هذه الصلاحية متاحة لمسؤول النظام فقط" });
       }
       // التحقق من حجم الصورة
@@ -87,7 +87,7 @@ export const uploadRouter = router({
   /**
    * رفع عدة صور دفعة واحدة
    */
-  multipleImages: protectedProcedure
+  multipleImages: operatorProcedure
     .input(
       z.object({
         images: z.array(

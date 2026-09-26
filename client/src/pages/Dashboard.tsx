@@ -330,7 +330,7 @@ export default function Dashboard() {
       </div>
 
       {/* Quick NFC Card for Owner (Only for Admin) */}
-      {user?.role === "admin" && (
+      {(user?.role === "owner" || user?.role === "admin") && (
         <div className="mb-6">
           <QuickNFCCardForOwner />
         </div>
