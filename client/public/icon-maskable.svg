@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0f766e"/>
+  <rect x="100" y="220" width="312" height="200" rx="14" fill="white" opacity="0.15"/>
+  <rect x="100" y="220" width="312" height="200" rx="14" fill="none" stroke="white" stroke-width="7" opacity="0.5"/>
+  <rect x="130" y="265" width="65" height="52" rx="8" fill="white" opacity="0.9"/>
+  <rect x="223" y="265" width="65" height="52" rx="8" fill="white" opacity="0.9"/>
+  <rect x="316" y="265" width="65" height="52" rx="8" fill="white" opacity="0.9"/>
+  <rect x="186" y="340" width="140" height="80" rx="8" fill="white" opacity="0.9"/>
+  <rect x="206" y="360" width="38" height="60" rx="5" fill="#0f766e"/>
+  <rect x="268" y="360" width="38" height="60" rx="5" fill="#0f766e"/>
+  <polygon points="60,226 256,100 452,226" fill="white" opacity="0.9"/>
+  <circle cx="370" cy="148" r="44" fill="#f59e0b"/>
+  <text x="370" y="164" text-anchor="middle" font-family="Arial" font-size="40" font-weight="bold" fill="white">T</text>
+</svg>

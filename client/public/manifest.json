@@ -1,0 +1,58 @@
+{
+  "name": "نظام إدارة العهد والأصول - Tolan",
+  "short_name": "Tolan",
+  "description": "نظام سحابي متكامل لإدارة العهد والأصول العينية وربطها بالفروع والموظفين",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0f766e",
+  "orientation": "portrait-primary",
+  "lang": "ar",
+  "dir": "rtl",
+  "scope": "/",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "الأصول",
+      "short_name": "الأصول",
+      "description": "إدارة الأصول",
+      "url": "/assets",
+      "icons": [{ "src": "/icon-192.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "العهد",
+      "short_name": "العهد",
+      "description": "إدارة العهد",
+      "url": "/custody",
+      "icons": [{ "src": "/icon-192.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "الجرد",
+      "short_name": "الجرد",
+      "description": "جرد الأصول والعهد",
+      "url": "/inventory-count",
+      "icons": [{ "src": "/icon-192.svg", "sizes": "192x192" }]
+    }
+  ]
+}

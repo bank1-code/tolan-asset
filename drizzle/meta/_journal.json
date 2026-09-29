@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1770983089046,
+      "tag": "0000_boring_namor",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1770983245399,
+      "tag": "0001_zippy_leopardon",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1770988015288,
+      "tag": "0002_sparkling_whistler",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1775994020080,
+      "tag": "0003_sloppy_whistler",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1776581778729,
+      "tag": "0004_magenta_stephen_strange",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1790363324315,
+      "tag": "0005_system_branding",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1790421737175,
+      "tag": "0006_role_hierarchy",
+      "breakpoints": true
+    }
+  ]
+}
