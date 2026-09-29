@@ -77,7 +77,7 @@ function Router() {
         <Route path="/archive" component={Archive} />
         <Route path="/reports" component={Reports} />
         {(user?.role === "owner" || user?.role === "admin") && <Route path="/users" component={UsersPage} />}
-        {(user?.role === "owner" || user?.role === "admin") && <Route path="/settings" component={Settings} />}
+        {(user?.role === "owner" || user?.role === "admin" || user?.role === "accountant") && <Route path="/settings" component={Settings} />}
         <Route path="/audit-log" component={AuditLog} />
         <Route path="/tracking" component={Tracking} />
         <Route path="/inventory-count" component={InventoryCount} />

@@ -3,18 +3,42 @@
  * أقسام، مواقع، موظفين، أنواع استبعاد
  */
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
-import { protectedProcedure, operatorProcedure, adminProcedure, deleteProcedure, ownerProcedure, router } from "../_core/trpc";
+import { eq, or, sql } from "drizzle-orm";
+import { protectedProcedure, operatorProcedure, ownerProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   departments,
   locations,
   employees,
   exclusionTypes,
+  assets,
+  custodyItems,
+  assetTransfers,
+  assetExclusions,
+  clearanceRecords,
+  inventorySessions,
+  users,
   appSettings,
 } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
 import { TRPCError } from "@trpc/server";
+
+function rethrowDeleteConstraint(error: unknown, entityLabel: string): never {
+  const dbError = error as {
+    code?: string;
+    errno?: number;
+    cause?: { code?: string; errno?: number };
+  };
+  const code = dbError?.code ?? dbError?.cause?.code;
+  const errno = dbError?.errno ?? dbError?.cause?.errno;
+  if (code === "ER_ROW_IS_REFERENCED_2" || errno === 1451) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `لا يمكن حذف ${entityLabel} لأنه مرتبط ببيانات أخرى في النظام. يجب فك الارتباط أولاً.`,
+    });
+  }
+  throw error;
+}
 
 // =============================================
 // الأقسام
@@ -29,7 +53,7 @@ const departmentsRouter = router({
     }).from(departments).leftJoin(locations, eq(departments.locationId, locations.id)).orderBy(departments.name);
   }),
 
-  create: adminProcedure
+  create: operatorProcedure
     .input(z.object({ name: z.string().min(1).max(255).transform(s => s.trim()).refine(s => s.length > 0, { message: "الاسم مطلوب" }), locationId: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -52,7 +76,7 @@ const departmentsRouter = router({
       return { id: insertId, name: input.name, locationId: input.locationId };
     }),
 
-  update: adminProcedure
+  update: operatorProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(255), locationId: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -77,13 +101,36 @@ const departmentsRouter = router({
       return { success: true };
     }),
 
-  delete: deleteProcedure
+  delete: operatorProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(departments).where(eq(departments.id, input.id)).limit(1);
-      await db.delete(departments).where(eq(departments.id, input.id));
+      if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "القسم غير موجود" });
+
+      const [linkedEmployee] = await db.select({ id: employees.id }).from(employees).where(eq(employees.departmentId, input.id)).limit(1);
+      if (linkedEmployee) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بموظفين. انقل الموظفين إلى قسم آخر أولاً." });
+      }
+      const [linkedAsset] = await db.select({ id: assets.id }).from(assets).where(eq(assets.departmentId, input.id)).limit(1);
+      if (linkedAsset) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بأصول مسجلة. انقل الأصول إلى قسم آخر أولاً." });
+      }
+      const [linkedCustody] = await db.select({ id: custodyItems.id }).from(custodyItems).where(eq(custodyItems.departmentId, input.id)).limit(1);
+      if (linkedCustody) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بعهد مسجلة. انقل العهد إلى قسم آخر أولاً." });
+      }
+      const [linkedInventory] = await db.select({ id: inventorySessions.id }).from(inventorySessions).where(eq(inventorySessions.departmentId, input.id)).limit(1);
+      if (linkedInventory) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بجلسات جرد مسجلة. يجب الاحتفاظ بالقسم حفاظاً على سجل الجرد." });
+      }
+
+      try {
+        await db.delete(departments).where(eq(departments.id, input.id));
+      } catch (error) {
+        rethrowDeleteConstraint(error, "القسم");
+      }
       await logAuditAction({
         tableName: "departments",
         recordId: input.id,
@@ -109,7 +156,7 @@ const locationsRouter = router({
     return db.select().from(locations).orderBy(locations.name);
   }),
 
-  create: adminProcedure
+  create: operatorProcedure
     .input(z.object({ name: z.string().min(1).max(255).transform(s => s.trim()).refine(s => s.length > 0, { message: "الاسم مطلوب" }) }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -130,7 +177,7 @@ const locationsRouter = router({
       return { id: insertId, name: input.name };
     }),
 
-  update: adminProcedure
+  update: operatorProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(255) }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -153,13 +200,32 @@ const locationsRouter = router({
       return { success: true };
     }),
 
-  delete: deleteProcedure
+  delete: operatorProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(locations).where(eq(locations.id, input.id)).limit(1);
-      await db.delete(locations).where(eq(locations.id, input.id));
+      if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "الموقع غير موجود" });
+
+      const [linkedDepartment] = await db.select({ id: departments.id }).from(departments).where(eq(departments.locationId, input.id)).limit(1);
+      if (linkedDepartment) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموقع لأنه مرتبط بأقسام. انقل أو احذف الأقسام المرتبطة أولاً." });
+      }
+      const [linkedAsset] = await db.select({ id: assets.id }).from(assets).where(eq(assets.locationId, input.id)).limit(1);
+      if (linkedAsset) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموقع لأنه مرتبط بأصول مسجلة. انقل الأصول إلى موقع آخر أولاً." });
+      }
+      const [linkedCustody] = await db.select({ id: custodyItems.id }).from(custodyItems).where(eq(custodyItems.locationId, input.id)).limit(1);
+      if (linkedCustody) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموقع لأنه مرتبط بعهد مسجلة. انقل العهد إلى موقع آخر أولاً." });
+      }
+
+      try {
+        await db.delete(locations).where(eq(locations.id, input.id));
+      } catch (error) {
+        rethrowDeleteConstraint(error, "الموقع");
+      }
       await logAuditAction({
         tableName: "locations",
         recordId: input.id,
@@ -193,7 +259,7 @@ const employeesRouter = router({
       .orderBy(employees.fullName);
   }),
 
-  create: adminProcedure
+  create: operatorProcedure
     .input(z.object({
       fullName: z.string().min(1).max(255),
       departmentId: z.number(),
@@ -228,7 +294,7 @@ const employeesRouter = router({
       return { id: insertId, ...input };
     }),
 
-  update: adminProcedure
+  update: operatorProcedure
     .input(z.object({
       id: z.number(),
       fullName: z.string().min(1).max(255),
@@ -274,13 +340,44 @@ const employeesRouter = router({
       return { success: true };
     }),
 
-  delete: deleteProcedure
+  delete: operatorProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(employees).where(eq(employees.id, input.id)).limit(1);
-      await db.delete(employees).where(eq(employees.id, input.id));
+      if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+
+      const [linkedUser] = await db.select({ id: users.id }).from(users).where(eq(users.employeeId, input.id)).limit(1);
+      if (linkedUser) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموظف لأنه مرتبط بحساب مستخدم في النظام. افصل حساب المستخدم عن الموظف أولاً." });
+      }
+      const [linkedAsset] = await db.select({ id: assets.id }).from(assets).where(eq(assets.assignedTo, input.id)).limit(1);
+      if (linkedAsset) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموظف لأنه مرتبط بأصول مسجلة. انقل الأصول إلى موظف آخر أولاً." });
+      }
+      const [linkedCustody] = await db.select({ id: custodyItems.id }).from(custodyItems).where(eq(custodyItems.assignedTo, input.id)).limit(1);
+      if (linkedCustody) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموظف لأنه مرتبط بعهد مسجلة. انقل العهد إلى موظف آخر أولاً." });
+      }
+      const [linkedTransfer] = await db
+        .select({ id: assetTransfers.id })
+        .from(assetTransfers)
+        .where(or(eq(assetTransfers.fromEmployeeId, input.id), eq(assetTransfers.toEmployeeId, input.id)))
+        .limit(1);
+      if (linkedTransfer) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموظف لوجود حركات نقل مرتبطة به. يجب الاحتفاظ بالموظف حفاظاً على سجل الحركات." });
+      }
+      const [linkedClearance] = await db.select({ id: clearanceRecords.id }).from(clearanceRecords).where(eq(clearanceRecords.employeeId, input.id)).limit(1);
+      if (linkedClearance) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموظف لوجود سجل براءة ذمة مرتبط به. يجب الاحتفاظ بالموظف حفاظاً على السجل." });
+      }
+
+      try {
+        await db.delete(employees).where(eq(employees.id, input.id));
+      } catch (error) {
+        rethrowDeleteConstraint(error, "الموظف");
+      }
       await logAuditAction({
         tableName: "employees",
         recordId: input.id,
@@ -306,7 +403,7 @@ const exclusionTypesRouter = router({
     return db.select().from(exclusionTypes).orderBy(exclusionTypes.name);
   }),
 
-  create: adminProcedure
+  create: operatorProcedure
     .input(z.object({ name: z.string().min(1).max(200) }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
@@ -327,13 +424,24 @@ const exclusionTypesRouter = router({
       return { id: insertId, name: input.name };
     }),
 
-  delete: deleteProcedure
+  delete: operatorProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [old] = await db.select().from(exclusionTypes).where(eq(exclusionTypes.id, input.id)).limit(1);
-      await db.delete(exclusionTypes).where(eq(exclusionTypes.id, input.id));
+      if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "نوع الاستبعاد غير موجود" });
+
+      const [linkedExclusion] = await db.select({ id: assetExclusions.id }).from(assetExclusions).where(eq(assetExclusions.exclusionTypeId, input.id)).limit(1);
+      if (linkedExclusion) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف نوع الاستبعاد لأنه مستخدم في عمليات استبعاد مسجلة. يجب الاحتفاظ به حفاظاً على سجل العمليات." });
+      }
+
+      try {
+        await db.delete(exclusionTypes).where(eq(exclusionTypes.id, input.id));
+      } catch (error) {
+        rethrowDeleteConstraint(error, "نوع الاستبعاد");
+      }
       await logAuditAction({
         tableName: "exclusion_types",
         recordId: input.id,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { operatorProcedure, adminProcedure, router } from "../_core/trpc";
+import { operatorProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
   assets,
@@ -423,7 +423,7 @@ export const excelRouter = router({
   // ==========================================
   // استيراد الموظفين
   // ==========================================
-  importEmployees: adminProcedure
+  importEmployees: operatorProcedure
     .input(z.object({ base64Data: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

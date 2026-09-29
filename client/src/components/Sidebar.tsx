@@ -92,8 +92,13 @@ export default function Sidebar({ collapsed, onToggle, onClose }: SidebarProps) 
     : menuGroups.map((group) => ({
         ...group,
         items: group.items.filter((item) => {
-          if (user?.role === "accountant" && (item.path === "/users" || item.path === "/settings")) return false;
-          if ((item.path === "/users" || item.path === "/settings") && user?.role !== "owner" && user?.role !== "admin") return false;
+          if (item.path === "/users" && user?.role !== "owner" && user?.role !== "admin") return false;
+          if (
+            item.path === "/settings" &&
+            user?.role !== "owner" &&
+            user?.role !== "admin" &&
+            user?.role !== "accountant"
+          ) return false;
           return true;
         }),
       })).filter((group) => group.items.length > 0);
