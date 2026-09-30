@@ -203,7 +203,7 @@ export const excelRouter = router({
   // استيراد الأصول
   // ==========================================
   importAssets: operatorProcedure
-    .input(z.object({ base64Data: z.string() }))
+    .input(z.object({ base64Data: z.string(), previewOnly: z.boolean().optional().default(false) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database not available");
@@ -247,7 +247,7 @@ export const excelRouter = router({
           const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
           if (!employee) throw new Error(`الموظف "${employeeName || "غير محدد"}" غير موجود`);
 
-          await db.insert(assets).values({
+          if (!input.previewOnly) await db.insert(assets).values({
             assetName: row.assetName,
             assetCode: row.assetCode || null,
             quantity: parseInt(row.quantity) || 1,
@@ -266,7 +266,7 @@ export const excelRouter = router({
         }
       }
 
-      await logAuditAction({
+      if (!input.previewOnly) await logAuditAction({
         tableName: "assets",
         actionType: "IMPORT",
         actionDescription: `استيراد أصول من Excel: ${imported} ناجح، ${skipped} تم تخطيه`,
@@ -275,7 +275,7 @@ export const excelRouter = router({
         ipAddress: ctx.req?.ip || "unknown",
       });
 
-      return { imported, skipped, errors, total: rows.length };
+      return { imported, skipped, errors, total: rows.length, previewOnly: input.previewOnly };
     }),
 
   // ==========================================
@@ -333,7 +333,7 @@ export const excelRouter = router({
   // استيراد العهد
   // ==========================================
   importCustody: operatorProcedure
-    .input(z.object({ base64Data: z.string() }))
+    .input(z.object({ base64Data: z.string(), previewOnly: z.boolean().optional().default(false) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database not available");
@@ -376,7 +376,7 @@ export const excelRouter = router({
           const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
           if (!employee) throw new Error(`الموظف "${employeeName || "غير محدد"}" غير موجود`);
 
-          await db.insert(custodyItems).values({
+          if (!input.previewOnly) await db.insert(custodyItems).values({
             name: row.name,
             code: row.code || null,
             quantity: parseInt(row.quantity) || 1,
@@ -395,7 +395,7 @@ export const excelRouter = router({
         }
       }
 
-      await logAuditAction({
+      if (!input.previewOnly) await logAuditAction({
         tableName: "custody_items",
         actionType: "IMPORT",
         actionDescription: `استيراد عهد من Excel: ${imported} ناجح، ${skipped} تم تخطيه`,
@@ -404,7 +404,7 @@ export const excelRouter = router({
         ipAddress: ctx.req?.ip || "unknown",
       });
 
-      return { imported, skipped, errors, total: rows.length };
+      return { imported, skipped, errors, total: rows.length, previewOnly: input.previewOnly };
     }),
 
   // ==========================================
