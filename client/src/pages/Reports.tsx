@@ -31,6 +31,7 @@ export default function Reports() {
   const [nameFilter, setNameFilter] = useState("");
   const [employeeFilter, setEmployeeFilter] = useState("الكل");
   const [deptFilter, setDeptFilter] = useState("الكل");
+  const [branchFilter, setBranchFilter] = useState("الكل");
   const [locFilter, setLocFilter] = useState("الكل");
   const [conditionFilter, setConditionFilter] = useState("الكل");
   const [typeFilter, setTypeFilter] = useState("الكل (أصول وعهد)");
@@ -44,6 +45,7 @@ export default function Reports() {
   const { data: rawData, isLoading } = trpc.records.reports.inventory.useQuery({ type: reportType });
   const { data: deptsList } = trpc.settings.departments.list.useQuery();
   const { data: locsList } = trpc.settings.locations.list.useQuery();
+  const { data: branchesList } = trpc.settings.branches.list.useQuery();
 
   // بناء البيانات الموحدة
   const allData = useMemo(() => {
@@ -57,6 +59,7 @@ export default function Reports() {
       total_value: (r.quantity || 0) * (parseFloat(r.unitValue) || 0),
       owner_name: r.employeeName || "-",
       department: r.departmentName || "-",
+      branch: r.branchName || "-",
       location: r.locationName || "-",
       condition: r.status || "جيد",
       notes: r.notes || "",
@@ -70,11 +73,12 @@ export default function Reports() {
       if (nameFilter && !row.name.toLowerCase().includes(nameFilter.toLowerCase())) return false;
       if (employeeFilter !== "الكل" && row.owner_name !== employeeFilter) return false;
       if (deptFilter !== "الكل" && row.department !== deptFilter) return false;
+      if (branchFilter !== "الكل" && row.branch !== branchFilter) return false;
       if (locFilter !== "الكل" && row.location !== locFilter) return false;
       if (conditionFilter !== "الكل" && row.condition !== conditionFilter) return false;
       return true;
     });
-  }, [allData, codeFilter, nameFilter, employeeFilter, deptFilter, locFilter, conditionFilter]);
+  }, [allData, codeFilter, nameFilter, employeeFilter, deptFilter, branchFilter, locFilter, conditionFilter]);
 
   const stats = useMemo(() => {
     let totalAssets = 0;
@@ -92,11 +96,12 @@ export default function Reports() {
     if (nameFilter) filters.push(`الاسم: ${nameFilter}`);
     if (employeeFilter !== "الكل") filters.push(`الموظف: ${employeeFilter}`);
     if (deptFilter !== "الكل") filters.push(`القسم: ${deptFilter}`);
+    if (branchFilter !== "الكل") filters.push(`الفرع: ${branchFilter}`);
     if (locFilter !== "الكل") filters.push(`الموقع: ${locFilter}`);
     if (conditionFilter !== "الكل") filters.push(`الحالة: ${conditionFilter}`);
     if (typeFilter !== "الكل (أصول وعهد)") filters.push(`النوع: ${typeFilter}`);
     return filters;
-  }, [codeFilter, nameFilter, employeeFilter, deptFilter, locFilter, conditionFilter, typeFilter]);
+  }, [codeFilter, nameFilter, employeeFilter, deptFilter, branchFilter, locFilter, conditionFilter, typeFilter]);
 
   const resetFilters = () => {
     setCodeFilter(""); setNameFilter(""); setEmployeeFilter("الكل");
@@ -126,6 +131,7 @@ export default function Reports() {
         ${showTotalColumn ? `<td class="num-cell total-cell">${formatNumber(row.total_value)}</td>` : ""}
         <td>${row.owner_name}</td>
         <td>${row.department}</td>
+        <td>${row.branch}</td>
         <td>${row.location}</td>
         <td>${row.condition}</td>
         <td class="notes-cell">${row.notes}</td>
@@ -179,7 +185,7 @@ export default function Reports() {
     <div class="filter-info">${filterText}</div>
     <table><thead><tr><th>م</th><th>النوع</th><th>الرمز</th><th>الاسم</th><th>الكمية</th>
     ${showUnitValue ? "<th>قيمة الوحدة</th>" : ""}${showTotalColumn ? "<th>إجمالي القيمة</th>" : ""}
-    <th>الموظف/المسؤول</th><th>القسم</th><th>الموقع</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
+    <th>الموظف/المسؤول</th><th>القسم</th><th>الفرع</th><th>الموقع</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
     <tbody>${tableRows}${totalRowHtml}</tbody></table>
     <div class="stats-section"><div class="stats-grid">
       <div class="stat-card"><div class="label">عدد العناصر</div><div class="value">${stats.count}</div></div>
@@ -239,6 +245,10 @@ export default function Reports() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-muted-foreground">الفرع</label>
+              <Select value={branchFilter} onValueChange={setBranchFilter}><SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="الكل">الكل</SelectItem>{(branchesList || []).map((b:any)=><SelectItem key={b.id} value={b.name}>{b.name}</SelectItem>)}</SelectContent></Select>
+            </div>
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-muted-foreground">القسم</label>
               <Select value={deptFilter} onValueChange={setDeptFilter}>
@@ -333,6 +343,7 @@ export default function Reports() {
                   {showTotalColumn && <th className="text-center text-[11px] font-bold text-primary px-3 py-2.5 w-28">إجمالي القيمة</th>}
                   <th className="text-right text-[11px] font-bold text-primary px-3 py-2.5">الموظف/المسؤول</th>
                   <th className="text-right text-[11px] font-bold text-primary px-3 py-2.5">القسم</th>
+                  <th className="text-right text-[11px] font-bold text-primary px-3 py-2.5">الفرع</th>
                   <th className="text-right text-[11px] font-bold text-primary px-3 py-2.5">الموقع</th>
                   <th className="text-right text-[11px] font-bold text-primary px-3 py-2.5 w-20">الحالة</th>
                   <th className="text-right text-[11px] font-bold text-primary px-3 py-2.5">ملاحظات</th>
@@ -366,6 +377,7 @@ export default function Reports() {
                         {showTotalColumn && <td className="px-3 py-2 text-center text-xs font-mono font-bold text-emerald-700">{formatNumber(row.total_value)}</td>}
                         <td className="px-3 py-2 text-xs">{row.owner_name}</td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">{row.department}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{row.branch}</td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">{row.location}</td>
                         <td className="px-3 py-2">
                           <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${

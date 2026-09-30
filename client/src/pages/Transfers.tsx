@@ -107,6 +107,7 @@ export default function Transfers() {
   const { data: employeesData } = trpc.settings.employees.list.useQuery();
   const { data: departmentsData } = trpc.settings.departments.list.useQuery();
   const { data: locationsData } = trpc.settings.locations.list.useQuery();
+  const { data: branchesData } = trpc.settings.branches.list.useQuery();
 
   const utils = trpc.useUtils();
   const createTransfer = trpc.operations.transfers.create.useMutation({
@@ -126,6 +127,7 @@ export default function Transfers() {
   const employees = employeesData || [];
   const departments = departmentsData || [];
   const locations_ = locationsData || [];
+  const branches = branchesData || [];
 
   // ─── state لعملية النقل الجديدة ─────────────────────────────────────────────
   const [showNew, setShowNew] = useState(false);
@@ -133,6 +135,7 @@ export default function Transfers() {
   const [transferItemId, setTransferItemId] = useState("");
   const [toEmployeeId, setToEmployeeId] = useState("");
   const [toLocationId, setToLocationId] = useState("");
+  const [toBranchId, setToBranchId] = useState("");
   const [toDepartmentId, setToDepartmentId] = useState("");
 
   // ─── state للاستعراض ──────────────────────────────────────────────────────
@@ -167,13 +170,13 @@ export default function Transfers() {
       id: a.id, type: "asset" as const, code: a.assetCode || "", name: a.assetName || "",
       quantity: a.quantity || 1, assignedTo: a.assignedTo, employeeName: a.employeeName || "غير محدد",
       departmentId: a.departmentId, departmentName: a.departmentName || "غير محدد",
-      locationId: a.locationId, locationName: a.locationName || "غير محدد",
+      locationId: a.locationId, locationName: a.locationName || "غير محدد", branchId: (a as any).branchId, branchName: (a as any).branchName || "غير محدد",
     }));
     const custodyItems = allCustody.filter((c: any) => c.status === "ACTIVE").map((c: any) => ({
       id: c.id, type: "custody" as const, code: c.code || "", name: c.name || "",
       quantity: c.quantity || 1, assignedTo: c.assignedTo, employeeName: c.employeeName || "غير محدد",
       departmentId: c.departmentId, departmentName: c.departmentName || "غير محدد",
-      locationId: c.locationId, locationName: c.locationName || "غير محدد",
+      locationId: c.locationId, locationName: c.locationName || "غير محدد", branchId: (c as any).branchId, branchName: (c as any).branchName || "غير محدد",
     }));
     return [...assetItems, ...custodyItems];
   }, [allAssets, allCustody]);
@@ -192,9 +195,8 @@ export default function Transfers() {
     return transferableItems.find((item) => item.type === type && item.id === Number(id)) || null;
   }, [transferItemId, transferableItems]);
 
-  const destinationDepartments = useMemo(() =>
-    departments.filter((d: any) => toLocationId && String(d.locationId) === toLocationId),
-  [departments, toLocationId]);
+  const destinationBranches = useMemo(() => branches.filter((b:any)=>toLocationId && String(b.locationId)===toLocationId),[branches,toLocationId]);
+  const destinationDepartments = useMemo(() => departments.filter((d:any)=>toBranchId && String(d.branchId)===toBranchId),[departments,toBranchId]);
 
   const handleSelectTransferItem = (value: string) => {
     setTransferItemId(value);
@@ -202,27 +204,26 @@ export default function Transfers() {
     const item = transferableItems.find((x) => x.type === type && x.id === Number(id));
     setToEmployeeId("");
     setToLocationId(item?.locationId ? String(item.locationId) : "");
+    setToBranchId((item as any)?.branchId ? String((item as any).branchId) : "");
     setToDepartmentId(item?.departmentId ? String(item.departmentId) : "");
   };
 
   const handleLocationChange = (value: string) => {
     setToLocationId(value);
-    // إذا تغير الموقع، يجب اختيار قسم تابع للموقع الجديد.
-    if (!departments.some((d: any) => String(d.id) === toDepartmentId && String(d.locationId) === value)) {
-      setToDepartmentId("");
-    }
+    setToBranchId("");
+    setToDepartmentId("");
   };
 
   const resetTransferForm = () => {
     setTransferSearch(""); setTransferItemId(""); setToEmployeeId("");
-    setToLocationId(""); setToDepartmentId("");
+    setToLocationId(""); setToBranchId(""); setToDepartmentId("");
   };
 
   // ─── تنفيذ النقل ───────────────────────────────────────────────────────────
   const handleTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTransferItem || !toEmployeeId || !toLocationId || !toDepartmentId) {
-      toast.error("يرجى اختيار الأصل/العهدة والموظف والموقع والقسم الجديد"); return;
+    if (!selectedTransferItem || !toEmployeeId || !toLocationId || !toBranchId || !toDepartmentId) {
+      toast.error("يرجى اختيار الأصل/العهدة والموظف والموقع والفرع والقسم الجديد"); return;
     }
     try {
       await createTransfer.mutateAsync({
@@ -457,14 +458,21 @@ export default function Transfers() {
                   </Select>
                 </div>
                 <div className="space-y-1.5">
+                  <label className="text-xs font-bold">الفرع الجديد</label>
+                  <Select value={toBranchId} onValueChange={(v)=>{setToBranchId(v);setToDepartmentId("")}} disabled={!toLocationId}>
+                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الفرع" /></SelectTrigger>
+                    <SelectContent>{destinationBranches.map((b:any)=><SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
                   <label className="text-xs font-bold">القسم الجديد</label>
-                  <Select value={toDepartmentId} onValueChange={setToDepartmentId} disabled={!toLocationId}>
+                  <Select value={toDepartmentId} onValueChange={setToDepartmentId} disabled={!toBranchId}>
                     <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر القسم" /></SelectTrigger>
                     <SelectContent>{destinationDepartments.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
               </div>
-              <p className="text-[11px] text-muted-foreground">الموظف الجديد مستقل عن قسمه الوظيفي؛ الموقع والقسم هنا يخصان الأصل أو العهدة المنقولة.</p>
+              <p className="text-[11px] text-muted-foreground">الموظف الجديد مستقل عن قسمه الوظيفي؛ الموقع والفرع والقسم هنا تخص الأصل أو العهدة المنقولة.</p>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">

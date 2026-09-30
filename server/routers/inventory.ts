@@ -10,6 +10,7 @@ import {
   custodyItems,
   employees,
   departments,
+  branches,
   locations,
   archiveDocuments,
   assetTransfers,
@@ -101,8 +102,8 @@ async function validateAssignment(db: any, locationId?: number | null, departmen
   if (!locationId || !departmentId) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "يجب اختيار الموقع والقسم معاً" });
   }
-  const [department] = await db.select({ id: departments.id, locationId: departments.locationId })
-    .from(departments).where(eq(departments.id, departmentId)).limit(1);
+  const [department] = await db.select({ id: departments.id, locationId: branches.locationId })
+    .from(departments).leftJoin(branches, eq(departments.branchId, branches.id)).where(eq(departments.id, departmentId)).limit(1);
   if (!department || department.locationId !== locationId) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد لا يتبع الموقع المختار" });
   }
@@ -208,6 +209,8 @@ const assetsRouter = router({
           employeeName: employees.fullName,
           departmentId: assets.departmentId,
           departmentName: departments.name,
+          branchId: departments.branchId,
+          branchName: branches.name,
           locationId: assets.locationId,
           locationName: locations.name,
           status: assets.status,
@@ -221,6 +224,7 @@ const assetsRouter = router({
         .from(assets)
         .leftJoin(employees, eq(assets.assignedTo, employees.id))
         .leftJoin(departments, eq(assets.departmentId, departments.id))
+        .leftJoin(branches, eq(departments.branchId, branches.id))
         .leftJoin(locations, eq(assets.locationId, locations.id))
         .where(where)
         .orderBy(desc(assets.createdAt));
@@ -245,6 +249,8 @@ const assetsRouter = router({
           employeeName: employees.fullName,
           departmentId: assets.departmentId,
           departmentName: departments.name,
+          branchId: departments.branchId,
+          branchName: branches.name,
           locationId: assets.locationId,
           locationName: locations.name,
           status: assets.status,
@@ -257,6 +263,7 @@ const assetsRouter = router({
         .from(assets)
         .leftJoin(employees, eq(assets.assignedTo, employees.id))
         .leftJoin(departments, eq(assets.departmentId, departments.id))
+        .leftJoin(branches, eq(departments.branchId, branches.id))
         .leftJoin(locations, eq(assets.locationId, locations.id))
         .where(ctx.user.role === "employee"
           ? and(eq(assets.id, input.id), eq(assets.assignedTo, ctx.user.employeeId ?? -1))
@@ -510,6 +517,8 @@ const custodyRouter = router({
           employeeName: employees.fullName,
           departmentId: custodyItems.departmentId,
           departmentName: departments.name,
+          branchId: departments.branchId,
+          branchName: branches.name,
           locationId: custodyItems.locationId,
           locationName: locations.name,
           status: custodyItems.status,
@@ -523,6 +532,7 @@ const custodyRouter = router({
         .from(custodyItems)
         .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
         .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
+        .leftJoin(branches, eq(departments.branchId, branches.id))
         .leftJoin(locations, eq(custodyItems.locationId, locations.id))
         .where(where)
         .orderBy(desc(custodyItems.createdAt));
@@ -547,6 +557,8 @@ const custodyRouter = router({
           employeeName: employees.fullName,
           departmentId: custodyItems.departmentId,
           departmentName: departments.name,
+          branchId: departments.branchId,
+          branchName: branches.name,
           locationId: custodyItems.locationId,
           locationName: locations.name,
           status: custodyItems.status,
@@ -559,6 +571,7 @@ const custodyRouter = router({
         .from(custodyItems)
         .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
         .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
+        .leftJoin(branches, eq(departments.branchId, branches.id))
         .leftJoin(locations, eq(custodyItems.locationId, locations.id))
         .where(ctx.user.role === "employee"
           ? and(eq(custodyItems.id, input.id), eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1))

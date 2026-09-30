@@ -6,6 +6,7 @@ import {
   custodyItems,
   employees,
   departments,
+  branches,
   locations,
   auditLog,
 } from "../../drizzle/schema";
@@ -100,6 +101,7 @@ const assetHeaders = [
   { key: "condition", label: "الحالة" },
   { key: "employeeName", label: "المستلم" },
   { key: "departmentName", label: "القسم" },
+  { key: "branchName", label: "الفرع" },
   { key: "locationName", label: "الموقع" },
   { key: "status", label: "الوضع" },
   { key: "notes", label: "ملاحظات" },
@@ -113,6 +115,7 @@ const custodyHeaders = [
   { key: "condition", label: "الحالة" },
   { key: "employeeName", label: "المستلم" },
   { key: "departmentName", label: "القسم" },
+  { key: "branchName", label: "الفرع" },
   { key: "locationName", label: "الموقع" },
   { key: "status", label: "الوضع" },
   { key: "notes", label: "ملاحظات" },
@@ -143,6 +146,7 @@ const reportHeaders = [
   { key: "totalValue", label: "إجمالي القيمة" },
   { key: "employeeName", label: "المستلم" },
   { key: "departmentName", label: "القسم" },
+  { key: "branchName", label: "الفرع" },
   { key: "locationName", label: "الموقع" },
   { key: "status", label: "الحالة" },
   { key: "notes", label: "ملاحظات" },
@@ -165,6 +169,7 @@ export const excelRouter = router({
         condition: assets.condition,
         employeeName: employees.fullName,
         departmentName: departments.name,
+        branchName: branches.name,
         locationName: locations.name,
         status: assets.status,
         notes: assets.notes,
@@ -172,6 +177,7 @@ export const excelRouter = router({
       .from(assets)
       .leftJoin(employees, eq(assets.assignedTo, employees.id))
       .leftJoin(departments, eq(assets.departmentId, departments.id))
+      .leftJoin(branches, eq(departments.branchId, branches.id))
       .leftJoin(locations, eq(assets.locationId, locations.id))
       .orderBy(assets.id);
 
@@ -215,6 +221,7 @@ export const excelRouter = router({
       // Get lookup maps
       const allEmployees = await db.select().from(employees);
       const allDepts = await db.select().from(departments);
+      const allBranches = await db.select().from(branches);
       const allLocs = await db.select().from(locations);
 
 
@@ -232,17 +239,16 @@ export const excelRouter = router({
 
           const locationName = String(row.locationName || "").trim();
           const departmentName = String(row.departmentName || "").trim();
+          const branchName = String(row.branchName || "").trim();
           const employeeName = String(row.employeeName || "").trim();
 
           const location = allLocs.find(l => String(l.name || "").trim() === locationName);
           if (!location) throw new Error(`الموقع "${locationName || "غير محدد"}" غير موجود`);
 
-          const department = allDepts.find(
-            d => String(d.name || "").trim() === departmentName && d.locationId === location.id
-          );
-          if (!department) {
-            throw new Error(`القسم "${departmentName || "غير محدد"}" غير موجود أو لا يتبع الموقع "${locationName}"`);
-          }
+          const branch = allBranches.find(b => String(b.name || "").trim() === branchName && b.locationId === location.id);
+          if (!branch) throw new Error(`الفرع "${branchName || "غير محدد"}" غير موجود أو لا يتبع الموقع "${locationName}"`);
+          const department = allDepts.find(d => String(d.name || "").trim() === departmentName && d.branchId === branch.id);
+          if (!department) throw new Error(`القسم "${departmentName || "غير محدد"}" غير موجود أو لا يتبع الفرع "${branchName}"`);
 
           // الموظف مستقل عن قسم وموقع الأصل/العهدة؛ يكفي أن يكون موجوداً في سجل الموظفين.
           const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
@@ -295,6 +301,7 @@ export const excelRouter = router({
         condition: custodyItems.condition,
         employeeName: employees.fullName,
         departmentName: departments.name,
+        branchName: branches.name,
         locationName: locations.name,
         status: custodyItems.status,
         notes: custodyItems.notes,
@@ -302,6 +309,7 @@ export const excelRouter = router({
       .from(custodyItems)
       .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
       .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
+      .leftJoin(branches, eq(departments.branchId, branches.id))
       .leftJoin(locations, eq(custodyItems.locationId, locations.id))
       .orderBy(custodyItems.id);
 
@@ -344,6 +352,7 @@ export const excelRouter = router({
 
       const allEmployees = await db.select().from(employees);
       const allDepts = await db.select().from(departments);
+      const allBranches = await db.select().from(branches);
       const allLocs = await db.select().from(locations);
 
 
@@ -361,17 +370,16 @@ export const excelRouter = router({
 
           const locationName = String(row.locationName || "").trim();
           const departmentName = String(row.departmentName || "").trim();
+          const branchName = String(row.branchName || "").trim();
           const employeeName = String(row.employeeName || "").trim();
 
           const location = allLocs.find(l => String(l.name || "").trim() === locationName);
           if (!location) throw new Error(`الموقع "${locationName || "غير محدد"}" غير موجود`);
 
-          const department = allDepts.find(
-            d => String(d.name || "").trim() === departmentName && d.locationId === location.id
-          );
-          if (!department) {
-            throw new Error(`القسم "${departmentName || "غير محدد"}" غير موجود أو لا يتبع الموقع "${locationName}"`);
-          }
+          const branch = allBranches.find(b => String(b.name || "").trim() === branchName && b.locationId === location.id);
+          if (!branch) throw new Error(`الفرع "${branchName || "غير محدد"}" غير موجود أو لا يتبع الموقع "${locationName}"`);
+          const department = allDepts.find(d => String(d.name || "").trim() === departmentName && d.branchId === branch.id);
+          if (!department) throw new Error(`القسم "${departmentName || "غير محدد"}" غير موجود أو لا يتبع الفرع "${branchName}"`);
 
           // الموظف مستقل عن قسم وموقع الأصل/العهدة؛ يكفي أن يكون موجوداً في سجل الموظفين.
           const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
@@ -547,6 +555,7 @@ export const excelRouter = router({
             assetValue: assets.assetValue,
             employeeName: employees.fullName,
             departmentName: departments.name,
+            branchName: branches.name,
             locationName: locations.name,
             status: assets.status,
             notes: assets.notes,
@@ -554,6 +563,7 @@ export const excelRouter = router({
           .from(assets)
           .leftJoin(employees, eq(assets.assignedTo, employees.id))
           .leftJoin(departments, eq(assets.departmentId, departments.id))
+          .leftJoin(branches, eq(departments.branchId, branches.id))
           .leftJoin(locations, eq(assets.locationId, locations.id));
 
         for (const a of allAssets) {
@@ -566,6 +576,7 @@ export const excelRouter = router({
             totalValue: String(Number(a.assetValue || 0) * (a.quantity || 1)),
             employeeName: a.employeeName || "",
             departmentName: a.departmentName || "",
+            branchName: a.branchName || "",
             locationName: a.locationName || "",
             status: a.status === "ACTIVE" ? "نشط" : a.status === "EXCLUDED" ? "مستبعد" : a.status,
             notes: a.notes || "",
@@ -582,6 +593,7 @@ export const excelRouter = router({
             assetValue: custodyItems.assetValue,
             employeeName: employees.fullName,
             departmentName: departments.name,
+            branchName: branches.name,
             locationName: locations.name,
             status: custodyItems.status,
             notes: custodyItems.notes,
@@ -589,6 +601,7 @@ export const excelRouter = router({
           .from(custodyItems)
           .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
           .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
+          .leftJoin(branches, eq(departments.branchId, branches.id))
           .leftJoin(locations, eq(custodyItems.locationId, locations.id));
 
         for (const c of allCustody) {
@@ -601,6 +614,7 @@ export const excelRouter = router({
             totalValue: String(Number(c.assetValue || 0) * (c.quantity || 1)),
             employeeName: c.employeeName || "",
             departmentName: c.departmentName || "",
+            branchName: c.branchName || "",
             locationName: c.locationName || "",
             status: c.status === "ACTIVE" ? "نشط" : c.status === "EXCLUDED" ? "مستبعد" : c.status,
             notes: c.notes || "",
@@ -688,6 +702,7 @@ export const excelRouter = router({
           condition: "جيد جدًا",
           employeeName: "اسم الموظف",
           departmentName: "اسم القسم",
+          branchName: "اسم الفرع",
           locationName: "اسم الموقع",
           status: "نشط",
           notes: "",
@@ -701,6 +716,7 @@ export const excelRouter = router({
           condition: "جيد جدًا",
           employeeName: "اسم الموظف",
           departmentName: "اسم القسم",
+          branchName: "اسم الفرع",
           locationName: "اسم الموقع",
           status: "نشط",
           notes: "",

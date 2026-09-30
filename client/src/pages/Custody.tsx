@@ -53,6 +53,7 @@ interface CustodyFormData {
   asset_value: string;
   assigned_to: string;
   department: string;
+  branch: string;
   location: string;
   condition: string;
   notes: string;
@@ -67,6 +68,7 @@ const emptyForm: CustodyFormData = {
   asset_value: "",
   assigned_to: "",
   department: "",
+  branch: "",
   location: "",
   condition: "جيد جدًا",
   notes: "",
@@ -103,6 +105,7 @@ export default function Custody() {
   const { data: custodyData, isLoading } = trpc.inventory.custody.list.useQuery(apiFilters);
   const { data: departmentsData } = trpc.settings.departments.list.useQuery();
   const { data: locationsData } = trpc.settings.locations.list.useQuery();
+  const { data: branchesData } = trpc.settings.branches.list.useQuery();
   const { data: employeesData } = trpc.settings.employees.list.useQuery();
 
   const utils = trpc.useUtils();
@@ -129,13 +132,15 @@ export default function Custody() {
   const items = custodyData || [];
   const departments = departmentsData || [];
   const locations_ = locationsData || [];
+  const branches = branchesData || [];
   const employees = employeesData || [];
 
   const [showAdd, setShowAdd] = useState(false);
   const [showView, setShowView] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [form, setForm] = useState<CustodyFormData>({ ...emptyForm });
-  const formDepartments = departments.filter((d) => !form.location || String(d.locationId) === form.location);
+  const formBranches = branches.filter((b: any) => !form.location || String(b.locationId) === form.location);
+  const formDepartments = departments.filter((d: any) => !form.branch || String(d.branchId) === form.branch);
   // الموظف المستلم مستقل عن القسم الوظيفي؛ قسم وموقع الأصل/العهدة يخصان العنصر نفسه.
   const formEmployees = employees;
   const [savedData, setSavedData] = useState<CustodyFormData | null>(null);
@@ -408,6 +413,7 @@ export default function Custody() {
       asset_value: String(item.assetValue || ""),
       assigned_to: item.assignedTo ? String(item.assignedTo) : "",
       department: item.departmentId ? String(item.departmentId) : "",
+      branch: item.branchId ? String(item.branchId) : "",
       location: item.locationId ? String(item.locationId) : "",
       condition: item.condition || "جيد جدًا",
       notes: item.notes || "",
@@ -705,7 +711,7 @@ export default function Custody() {
               <FormField label="قيمة العهدة" value={form.asset_value} onChange={(v) => setForm((f) => ({ ...f, asset_value: v }))} type="number" placeholder="0.00" />
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-foreground">موقع العهدة <span className="text-red-500">*</span></label>
-                <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, department: "", assigned_to: "" }))}>
+                <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, branch: "", department: "", assigned_to: "" }))}>
                   <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع أولاً" /></SelectTrigger>
                   <SelectContent>
                     {locations_.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
@@ -713,9 +719,16 @@ export default function Custody() {
                 </Select>
               </div>
               <div className="space-y-1.5">
+                <label className="text-xs font-bold text-foreground">الفرع <span className="text-red-500">*</span></label>
+                <Select value={form.branch} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, branch: v, department: "", assigned_to: "" }))}>
+                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر الفرع" : "اختر الموقع أولاً"} /></SelectTrigger>
+                  <SelectContent>{formBranches.map((b: any) => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
                 <label className="text-xs font-bold text-foreground">القسم <span className="text-red-500">*</span></label>
-                <Select value={form.department} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر القسم" : "اختر الموقع أولاً"} /></SelectTrigger>
+                <Select value={form.department} disabled={!form.branch} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
+                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.branch ? "اختر القسم" : "اختر الفرع أولاً"} /></SelectTrigger>
                   <SelectContent>
                     {formDepartments.map((d) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}
                   </SelectContent>

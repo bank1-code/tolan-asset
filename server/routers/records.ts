@@ -13,6 +13,7 @@ import {
   custodyItems,
   employees,
   departments,
+  branches,
   locations,
 } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
@@ -205,6 +206,7 @@ const reportsRouter = router({
       employeeId: z.number().optional(),
       departmentId: z.number().optional(),
       locationId: z.number().optional(),
+      branchId: z.number().optional(),
       status: z.string().optional(),
     }).optional())
     .query(async ({ input }) => {
@@ -219,6 +221,7 @@ const reportsRouter = router({
         if (input?.employeeId) assetConditions.push(eq(assets.assignedTo, input.employeeId));
         if (input?.departmentId) assetConditions.push(eq(assets.departmentId, input.departmentId));
         if (input?.locationId) assetConditions.push(eq(assets.locationId, input.locationId));
+        if (input?.branchId) assetConditions.push(eq(departments.branchId, input.branchId));
         if (input?.status) assetConditions.push(eq(assets.status, input.status));
 
         const assetRows = await db
@@ -231,6 +234,8 @@ const reportsRouter = router({
             unitValue: assets.assetValue,
             employeeName: employees.fullName,
             departmentName: departments.name,
+            branchId: departments.branchId,
+            branchName: branches.name,
             locationName: locations.name,
             status: assets.status,
             notes: assets.notes,
@@ -238,6 +243,7 @@ const reportsRouter = router({
           .from(assets)
           .leftJoin(employees, eq(assets.assignedTo, employees.id))
           .leftJoin(departments, eq(assets.departmentId, departments.id))
+          .leftJoin(branches, eq(departments.branchId, branches.id))
           .leftJoin(locations, eq(assets.locationId, locations.id))
           .where(assetConditions.length > 0 ? and(...assetConditions) : undefined);
 
@@ -250,6 +256,7 @@ const reportsRouter = router({
         if (input?.employeeId) custodyConditions.push(eq(custodyItems.assignedTo, input.employeeId));
         if (input?.departmentId) custodyConditions.push(eq(custodyItems.departmentId, input.departmentId));
         if (input?.locationId) custodyConditions.push(eq(custodyItems.locationId, input.locationId));
+        if (input?.branchId) custodyConditions.push(eq(departments.branchId, input.branchId));
         if (input?.status) custodyConditions.push(eq(custodyItems.status, input.status));
 
         const custodyRows = await db
@@ -262,6 +269,8 @@ const reportsRouter = router({
             unitValue: custodyItems.assetValue,
             employeeName: employees.fullName,
             departmentName: departments.name,
+            branchId: departments.branchId,
+            branchName: branches.name,
             locationName: locations.name,
             status: custodyItems.status,
             notes: custodyItems.notes,
@@ -269,6 +278,7 @@ const reportsRouter = router({
           .from(custodyItems)
           .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
           .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
+          .leftJoin(branches, eq(departments.branchId, branches.id))
           .leftJoin(locations, eq(custodyItems.locationId, locations.id))
           .where(custodyConditions.length > 0 ? and(...custodyConditions) : undefined);
 

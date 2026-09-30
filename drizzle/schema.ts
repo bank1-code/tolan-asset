@@ -34,12 +34,27 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
 // =============================================
-// 2. الأقسام (departments)
+// 2. الفروع (branches)
+// =============================================
+export const branches = mysqlTable("branches", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  locationId: int("locationId").references(() => locations.id).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Branch = typeof branches.$inferSelect;
+export type InsertBranch = typeof branches.$inferInsert;
+
+// =============================================
+// 3. الأقسام (departments)
 // =============================================
 export const departments = mysqlTable("departments", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
   locationId: int("locationId").references(() => locations.id),
+  branchId: int("branchId").references(() => branches.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

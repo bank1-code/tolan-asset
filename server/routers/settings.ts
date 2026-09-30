@@ -8,6 +8,7 @@ import { protectedProcedure, operatorProcedure, ownerProcedure, router } from ".
 import { getDb } from "../db";
 import {
   departments,
+  branches,
   locations,
   employees,
   exclusionTypes,
@@ -48,102 +49,51 @@ const departmentsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
     return db.select({
-      id: departments.id, name: departments.name, locationId: departments.locationId,
-      locationName: locations.name, createdAt: departments.createdAt, updatedAt: departments.updatedAt,
-    }).from(departments).leftJoin(locations, eq(departments.locationId, locations.id)).orderBy(departments.name);
+      id: departments.id, name: departments.name, branchId: departments.branchId, locationId: departments.locationId,
+      branchName: branches.name, locationName: locations.name, createdAt: departments.createdAt, updatedAt: departments.updatedAt,
+    }).from(departments)
+      .leftJoin(branches, eq(departments.branchId, branches.id))
+      .leftJoin(locations, eq(branches.locationId, locations.id))
+      .orderBy(departments.name);
   }),
+  create: operatorProcedure.input(z.object({ name: z.string().trim().min(1).max(255), branchId: z.number() })).mutation(async ({ input, ctx }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [branch] = await db.select({ id: branches.id, locationId: branches.locationId }).from(branches).where(eq(branches.id, input.branchId)).limit(1);
+    if (!branch) throw new TRPCError({ code: "BAD_REQUEST", message: "الفرع المحدد غير موجود" });
+    const result = await db.insert(departments).values({ name: input.name, branchId: input.branchId, locationId: branch.locationId });
+    const id = Number(result[0].insertId);
+    await logAuditAction({ tableName:"departments", recordId:id, actionType:"CREATE", actionDescription:`إضافة قسم: ${input.name}`, newData:input, performedBy:ctx.user.id, performedByName:ctx.user.name||undefined, ipAddress:ctx.req.ip||undefined, userAgent:ctx.req.headers["user-agent"]||undefined });
+    return { id, ...input, locationId: branch.locationId };
+  }),
+  update: operatorProcedure.input(z.object({ id:z.number(), name:z.string().trim().min(1).max(255), branchId:z.number() })).mutation(async ({ input, ctx }) => {
+    const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"});
+    const [old]=await db.select().from(departments).where(eq(departments.id,input.id)).limit(1);
+    const [branch]=await db.select({id:branches.id,locationId:branches.locationId}).from(branches).where(eq(branches.id,input.branchId)).limit(1);
+    if(!branch) throw new TRPCError({code:"BAD_REQUEST",message:"الفرع المحدد غير موجود"});
+    await db.update(departments).set({name:input.name,branchId:input.branchId,locationId:branch.locationId}).where(eq(departments.id,input.id));
+    await logAuditAction({tableName:"departments",recordId:input.id,actionType:"UPDATE",actionDescription:`تعديل قسم: ${old?.name} → ${input.name}`,oldData:old,newData:input,changedFields:["name","branchId"],performedBy:ctx.user.id,performedByName:ctx.user.name||undefined,ipAddress:ctx.req.ip||undefined,userAgent:ctx.req.headers["user-agent"]||undefined});
+    return {success:true};
+  }),
+  delete: operatorProcedure.input(z.object({id:z.number()})).mutation(async ({input,ctx})=>{
+    const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"});
+    const [old]=await db.select().from(departments).where(eq(departments.id,input.id)).limit(1); if(!old) throw new TRPCError({code:"NOT_FOUND",message:"القسم غير موجود"});
+    if((await db.select({id:employees.id}).from(employees).where(eq(employees.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بموظفين."});
+    if((await db.select({id:assets.id}).from(assets).where(eq(assets.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بأصول مسجلة."});
+    if((await db.select({id:custodyItems.id}).from(custodyItems).where(eq(custodyItems.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بعهد مسجلة."});
+    if((await db.select({id:inventorySessions.id}).from(inventorySessions).where(eq(inventorySessions.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بجلسات جرد."});
+    try { await db.delete(departments).where(eq(departments.id,input.id)); } catch(e){ rethrowDeleteConstraint(e,"القسم"); }
+    await logAuditAction({tableName:"departments",recordId:input.id,actionType:"DELETE",actionDescription:`حذف قسم: ${old.name}`,oldData:old,performedBy:ctx.user.id,performedByName:ctx.user.name||undefined,ipAddress:ctx.req.ip||undefined,userAgent:ctx.req.headers["user-agent"]||undefined}); return {success:true};
+  }),
+});
 
-  create: operatorProcedure
-    .input(z.object({ name: z.string().min(1).max(255).transform(s => s.trim()).refine(s => s.length > 0, { message: "الاسم مطلوب" }), locationId: z.number() }))
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [location] = await db.select({ id: locations.id }).from(locations).where(eq(locations.id, input.locationId)).limit(1);
-      if (!location) throw new TRPCError({ code: "BAD_REQUEST", message: "الموقع المحدد غير موجود" });
-      const result = await db.insert(departments).values({ name: input.name, locationId: input.locationId });
-      const insertId = Number(result[0].insertId);
-      await logAuditAction({
-        tableName: "departments",
-        recordId: insertId,
-        actionType: "CREATE",
-        actionDescription: `إضافة قسم: ${input.name}`,
-        newData: { name: input.name, locationId: input.locationId },
-        performedBy: ctx.user.id,
-        performedByName: ctx.user.name || undefined,
-        ipAddress: ctx.req.ip || undefined,
-        userAgent: ctx.req.headers["user-agent"] || undefined,
-      });
-      return { id: insertId, name: input.name, locationId: input.locationId };
-    }),
-
-  update: operatorProcedure
-    .input(z.object({ id: z.number(), name: z.string().min(1).max(255), locationId: z.number() }))
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [old] = await db.select().from(departments).where(eq(departments.id, input.id)).limit(1);
-      const [location] = await db.select({ id: locations.id }).from(locations).where(eq(locations.id, input.locationId)).limit(1);
-      if (!location) throw new TRPCError({ code: "BAD_REQUEST", message: "الموقع المحدد غير موجود" });
-      await db.update(departments).set({ name: input.name, locationId: input.locationId }).where(eq(departments.id, input.id));
-      await logAuditAction({
-        tableName: "departments",
-        recordId: input.id,
-        actionType: "UPDATE",
-        actionDescription: `تعديل قسم: ${old?.name} → ${input.name}`,
-        oldData: old,
-        newData: { name: input.name, locationId: input.locationId },
-        changedFields: ["name", "locationId"],
-        performedBy: ctx.user.id,
-        performedByName: ctx.user.name || undefined,
-        ipAddress: ctx.req.ip || undefined,
-        userAgent: ctx.req.headers["user-agent"] || undefined,
-      });
-      return { success: true };
-    }),
-
-  delete: operatorProcedure
-    .input(z.object({ id: z.number() }))
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [old] = await db.select().from(departments).where(eq(departments.id, input.id)).limit(1);
-      if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "القسم غير موجود" });
-
-      const [linkedEmployee] = await db.select({ id: employees.id }).from(employees).where(eq(employees.departmentId, input.id)).limit(1);
-      if (linkedEmployee) {
-        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بموظفين. انقل الموظفين إلى قسم آخر أولاً." });
-      }
-      const [linkedAsset] = await db.select({ id: assets.id }).from(assets).where(eq(assets.departmentId, input.id)).limit(1);
-      if (linkedAsset) {
-        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بأصول مسجلة. انقل الأصول إلى قسم آخر أولاً." });
-      }
-      const [linkedCustody] = await db.select({ id: custodyItems.id }).from(custodyItems).where(eq(custodyItems.departmentId, input.id)).limit(1);
-      if (linkedCustody) {
-        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بعهد مسجلة. انقل العهد إلى قسم آخر أولاً." });
-      }
-      const [linkedInventory] = await db.select({ id: inventorySessions.id }).from(inventorySessions).where(eq(inventorySessions.departmentId, input.id)).limit(1);
-      if (linkedInventory) {
-        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف القسم لأنه مرتبط بجلسات جرد مسجلة. يجب الاحتفاظ بالقسم حفاظاً على سجل الجرد." });
-      }
-
-      try {
-        await db.delete(departments).where(eq(departments.id, input.id));
-      } catch (error) {
-        rethrowDeleteConstraint(error, "القسم");
-      }
-      await logAuditAction({
-        tableName: "departments",
-        recordId: input.id,
-        actionType: "DELETE",
-        actionDescription: `حذف قسم: ${old?.name}`,
-        oldData: old,
-        performedBy: ctx.user.id,
-        performedByName: ctx.user.name || undefined,
-        ipAddress: ctx.req.ip || undefined,
-        userAgent: ctx.req.headers["user-agent"] || undefined,
-      });
-      return { success: true };
-    }),
+// =============================================
+// الفروع
+// =============================================
+const branchesRouter = router({
+  list: operatorProcedure.query(async()=>{ const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"}); return db.select({id:branches.id,name:branches.name,locationId:branches.locationId,locationName:locations.name,createdAt:branches.createdAt,updatedAt:branches.updatedAt}).from(branches).leftJoin(locations,eq(branches.locationId,locations.id)).orderBy(branches.name); }),
+  create: operatorProcedure.input(z.object({name:z.string().trim().min(1).max(255),locationId:z.number()})).mutation(async({input,ctx})=>{ const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"}); if(!(await db.select({id:locations.id}).from(locations).where(eq(locations.id,input.locationId)).limit(1))[0]) throw new TRPCError({code:"BAD_REQUEST",message:"الموقع المحدد غير موجود"}); const r=await db.insert(branches).values(input); const id=Number(r[0].insertId); await logAuditAction({tableName:"branches",recordId:id,actionType:"CREATE",actionDescription:`إضافة فرع: ${input.name}`,newData:input,performedBy:ctx.user.id,performedByName:ctx.user.name||undefined,ipAddress:ctx.req.ip||undefined,userAgent:ctx.req.headers["user-agent"]||undefined}); return {id,...input}; }),
+  update: operatorProcedure.input(z.object({id:z.number(),name:z.string().trim().min(1).max(255),locationId:z.number()})).mutation(async({input,ctx})=>{ const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"}); const [old]=await db.select().from(branches).where(eq(branches.id,input.id)).limit(1); if(!old) throw new TRPCError({code:"NOT_FOUND",message:"الفرع غير موجود"}); await db.update(branches).set({name:input.name,locationId:input.locationId}).where(eq(branches.id,input.id)); await db.update(departments).set({locationId:input.locationId}).where(eq(departments.branchId,input.id)); await db.update(assets).set({locationId:input.locationId}).where(sql`${assets.departmentId} IN (SELECT id FROM departments WHERE branchId = ${input.id})`); await db.update(custodyItems).set({locationId:input.locationId}).where(sql`${custodyItems.departmentId} IN (SELECT id FROM departments WHERE branchId = ${input.id})`); await logAuditAction({tableName:"branches",recordId:input.id,actionType:"UPDATE",actionDescription:`تعديل فرع: ${old.name} → ${input.name}`,oldData:old,newData:input,performedBy:ctx.user.id,performedByName:ctx.user.name||undefined,ipAddress:ctx.req.ip||undefined,userAgent:ctx.req.headers["user-agent"]||undefined}); return {success:true}; }),
+  delete: operatorProcedure.input(z.object({id:z.number()})).mutation(async({input,ctx})=>{ const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"}); const [old]=await db.select().from(branches).where(eq(branches.id,input.id)).limit(1); if(!old) throw new TRPCError({code:"NOT_FOUND",message:"الفرع غير موجود"}); if((await db.select({id:departments.id}).from(departments).where(eq(departments.branchId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف الفرع لأنه مرتبط بأقسام. انقل الأقسام أولاً."}); await db.delete(branches).where(eq(branches.id,input.id)); await logAuditAction({tableName:"branches",recordId:input.id,actionType:"DELETE",actionDescription:`حذف فرع: ${old.name}`,oldData:old,performedBy:ctx.user.id,performedByName:ctx.user.name||undefined,ipAddress:ctx.req.ip||undefined,userAgent:ctx.req.headers["user-agent"]||undefined}); return {success:true}; })
 });
 
 // =============================================
@@ -208,9 +158,9 @@ const locationsRouter = router({
       const [old] = await db.select().from(locations).where(eq(locations.id, input.id)).limit(1);
       if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "الموقع غير موجود" });
 
-      const [linkedDepartment] = await db.select({ id: departments.id }).from(departments).where(eq(departments.locationId, input.id)).limit(1);
-      if (linkedDepartment) {
-        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموقع لأنه مرتبط بأقسام. انقل أو احذف الأقسام المرتبطة أولاً." });
+      const [linkedBranch] = await db.select({ id: branches.id }).from(branches).where(eq(branches.locationId, input.id)).limit(1);
+      if (linkedBranch) {
+        throw new TRPCError({ code: "CONFLICT", message: "لا يمكن حذف الموقع لأنه مرتبط بفروع. انقل أو احذف الفروع المرتبطة أولاً." });
       }
       const [linkedAsset] = await db.select({ id: assets.id }).from(assets).where(eq(assets.locationId, input.id)).limit(1);
       if (linkedAsset) {
@@ -250,12 +200,13 @@ const employeesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select({
       id: employees.id, fullName: employees.fullName, departmentId: employees.departmentId,
-      departmentName: departments.name, locationId: departments.locationId, locationName: locations.name,
+      departmentName: departments.name, branchId: departments.branchId, branchName: branches.name, locationId: branches.locationId, locationName: locations.name,
       fingerprintId: employees.fingerprintId, nationalId: employees.nationalId, phone: employees.phone,
       createdAt: employees.createdAt, updatedAt: employees.updatedAt,
     }).from(employees)
       .leftJoin(departments, eq(employees.departmentId, departments.id))
-      .leftJoin(locations, eq(departments.locationId, locations.id))
+      .leftJoin(branches, eq(departments.branchId, branches.id))
+      .leftJoin(locations, eq(branches.locationId, locations.id))
       .orderBy(employees.fullName);
   }),
 
@@ -534,6 +485,7 @@ const brandingRouter = router({
 // =============================================
 export const settingsRouter = router({
   departments: departmentsRouter,
+  branches: branchesRouter,
   locations: locationsRouter,
   employees: employeesRouter,
   exclusionTypes: exclusionTypesRouter,

@@ -10,6 +10,7 @@ import {
   custodyItems,
   employees,
   departments,
+  branches,
   locations,
   assetTransfers,
   assetExclusions,
@@ -30,10 +31,13 @@ async function resolveTransferDestination(db: any, employeeId: number, locationI
   const [department] = await db.select({
     id: departments.id,
     name: departments.name,
-    locationId: departments.locationId,
+    branchId: departments.branchId,
+    branchName: branches.name,
+    locationId: branches.locationId,
     locationName: locations.name,
   }).from(departments)
-    .leftJoin(locations, eq(departments.locationId, locations.id))
+    .leftJoin(branches, eq(departments.branchId, branches.id))
+    .leftJoin(locations, eq(branches.locationId, locations.id))
     .where(eq(departments.id, departmentId)).limit(1);
   if (!department) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم الجديد غير موجود" });
   if (department.locationId !== locationId) {
