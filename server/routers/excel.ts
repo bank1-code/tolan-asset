@@ -121,6 +121,7 @@ const custodyHeaders = [
 const employeeHeaders = [
   { key: "fingerprintId", label: "رقم البصمة", aliases: ["الرقم الوظيفي", "رقم وظيفي"] },
   { key: "fullName", label: "اسم الموظف", aliases: ["الاسم الكامل", "الاسم"] },
+  { key: "nationalId", label: "رقم الهوية", aliases: ["رقم الهوية الوطنية", "الهوية", "رقم الإقامة"] },
 ];
 
 const auditHeaders = [
@@ -474,6 +475,7 @@ export const excelRouter = router({
         try {
           const fullName = row.fullName?.trim();
           const fingerprintId = row.fingerprintId?.trim();
+          const nationalId = row.nationalId?.trim() || null;
 
           if (!fullName) throw new Error("اسم الموظف مطلوب");
           if (!fingerprintId) throw new Error("رقم البصمة / الرقم الوظيفي مطلوب");
@@ -485,7 +487,7 @@ export const excelRouter = router({
             fullName,
             fingerprintId,
             departmentId: null,
-            nationalId: null,
+            nationalId,
             phone: null,
           });
           knownFingerprintIds.add(fingerprintId);
@@ -692,6 +694,7 @@ export const excelRouter = router({
         sampleData.push({
           fingerprintId: "1001",
           fullName: "مثال: أحمد محمد",
+          nationalId: "1098765432",
         });
       }
 
