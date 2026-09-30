@@ -22,20 +22,30 @@ import { logAuditAction } from "../security";
 import { TRPCError } from "@trpc/server";
 
 
-async function resolveEmployeeHierarchy(db: any, employeeId: number) {
-  const [row] = await db.select({
-    employeeId: employees.id,
-    departmentId: employees.departmentId,
-    departmentName: departments.name,
+async function resolveTransferDestination(db: any, employeeId: number, locationId: number, departmentId: number) {
+  const [employee] = await db.select({ id: employees.id }).from(employees)
+    .where(eq(employees.id, employeeId)).limit(1);
+  if (!employee) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير موجود" });
+
+  const [department] = await db.select({
+    id: departments.id,
+    name: departments.name,
     locationId: departments.locationId,
     locationName: locations.name,
-  }).from(employees)
-    .leftJoin(departments, eq(employees.departmentId, departments.id))
+  }).from(departments)
     .leftJoin(locations, eq(departments.locationId, locations.id))
-    .where(eq(employees.id, employeeId)).limit(1);
-  if (!row) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير موجود" });
-  if (!row.departmentId || !row.locationId) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير مرتبط بقسم وموقع صالحين" });
-  return row;
+    .where(eq(departments.id, departmentId)).limit(1);
+  if (!department) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم الجديد غير موجود" });
+  if (department.locationId !== locationId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "القسم الجديد لا يتبع الموقع الجديد المختار" });
+  }
+  return {
+    employeeId,
+    departmentId,
+    departmentName: department.name,
+    locationId,
+    locationName: department.locationName || "",
+  };
 }
 
 // =============================================
@@ -112,6 +122,8 @@ const transfersRouter = router({
       movementType: z.enum(["total", "partial"]),
       fromEmployeeId: z.number().optional().nullable(),
       toEmployeeId: z.number(),
+      toDepartmentId: z.number(),
+      toLocationId: z.number(),
       fromDepartment: z.string().optional().nullable(),
       toDepartment: z.string().optional().nullable(),
       fromLocation: z.string().optional().nullable(),
@@ -129,7 +141,7 @@ const transfersRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const destination = await resolveEmployeeHierarchy(db, input.toEmployeeId);
+      const destination = await resolveTransferDestination(db, input.toEmployeeId, input.toLocationId, input.toDepartmentId);
 
       if (input.movementType === "total") {
         // نقل كلي - نقل جميع عناصر الموظف
@@ -179,29 +191,50 @@ const transfersRouter = router({
 
         return { success: true, id: Number(result[0].insertId) };
       } else {
-        // نقل جزئي - نقل عناصر محددة
-        const items = input.items || [{ entityType: input.entityType, entityId: input.entityId, quantity: input.quantity }];
-        
-        for (const item of items) {
-          const table = item.entityType === "asset" ? assets : custodyItems;
-          await db.update(table).set({
-            assignedTo: input.toEmployeeId,
-            departmentId: destination.departmentId,
-            locationId: destination.locationId,
-          }).where(eq(table.id, item.entityId));
+        // نقل عنصر محدد: الموظف والموقع والقسم الجديد مستقلة عن القسم الوظيفي للموظف.
+        let current: any;
+        if (input.entityType === "asset") {
+          [current] = await db.select({
+            id: assets.id, name: assets.assetName, code: assets.assetCode, quantity: assets.quantity,
+            assignedTo: assets.assignedTo, departmentId: assets.departmentId, departmentName: departments.name,
+            locationId: assets.locationId, locationName: locations.name, status: assets.status,
+          }).from(assets)
+            .leftJoin(departments, eq(assets.departmentId, departments.id))
+            .leftJoin(locations, eq(assets.locationId, locations.id))
+            .where(eq(assets.id, input.entityId)).limit(1);
+        } else {
+          [current] = await db.select({
+            id: custodyItems.id, name: custodyItems.name, code: custodyItems.code, quantity: custodyItems.quantity,
+            assignedTo: custodyItems.assignedTo, departmentId: custodyItems.departmentId, departmentName: departments.name,
+            locationId: custodyItems.locationId, locationName: locations.name, status: custodyItems.status,
+          }).from(custodyItems)
+            .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
+            .leftJoin(locations, eq(custodyItems.locationId, locations.id))
+            .where(eq(custodyItems.id, input.entityId)).limit(1);
+        }
+
+        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "الأصل أو العهدة المحددة غير موجودة" });
+        if (current.status !== "ACTIVE") throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن نقل عنصر غير نشط" });
+
+        if (input.entityType === "asset") {
+          await db.update(assets).set({ assignedTo: input.toEmployeeId, departmentId: destination.departmentId, locationId: destination.locationId })
+            .where(eq(assets.id, input.entityId));
+        } else {
+          await db.update(custodyItems).set({ assignedTo: input.toEmployeeId, departmentId: destination.departmentId, locationId: destination.locationId })
+            .where(eq(custodyItems.id, input.entityId));
         }
 
         const result = await db.insert(assetTransfers).values({
           entityType: input.entityType,
           entityId: input.entityId,
           movementType: "partial",
-          fromEmployeeId: input.fromEmployeeId || null,
+          fromEmployeeId: current.assignedTo || null,
           toEmployeeId: input.toEmployeeId,
-          fromDepartment: input.fromDepartment || null,
-          toDepartment: destination.departmentName || input.toDepartment || null,
-          fromLocation: input.fromLocation || null,
-          toLocation: destination.locationName || input.toLocation || null,
-          quantity: items.length,
+          fromDepartment: current.departmentName || null,
+          toDepartment: destination.departmentName || null,
+          fromLocation: current.locationName || null,
+          toLocation: destination.locationName || null,
+          quantity: current.quantity || 1,
           assetValue: input.assetValue || null,
           notes: input.notes || null,
           transferredBy: ctx.user.id,
@@ -211,8 +244,9 @@ const transfersRouter = router({
           tableName: "asset_transfers",
           recordId: Number(result[0].insertId),
           actionType: "TRANSFER",
-          actionDescription: `نقل جزئي ${items.length} عنصر إلى موظف #${input.toEmployeeId}`,
-          newData: { ...input, items },
+          actionDescription: `نقل ${input.entityType === "asset" ? "أصل" : "عهدة"} #${input.entityId} إلى موظف #${input.toEmployeeId}`,
+          oldData: current,
+          newData: { ...input, destination },
           performedBy: ctx.user.id,
           performedByName: ctx.user.name || undefined,
           ipAddress: ctx.req.ip || undefined,

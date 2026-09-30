@@ -136,7 +136,8 @@ export default function Assets() {
   const [editingAsset, setEditingAsset] = useState<any>(null);
   const [form, setForm] = useState<AssetFormData>({ ...emptyForm });
   const formDepartments = departments.filter((d) => !form.location || String(d.locationId) === form.location);
-  const formEmployees = employees.filter((e) => !form.department || String(e.departmentId) === form.department);
+  // الموظف المستلم مستقل عن القسم الوظيفي؛ قسم وموقع الأصل/العهدة يخصان العنصر نفسه.
+  const formEmployees = employees;
   const [savedData, setSavedData] = useState<AssetFormData | null>(null);
   const [documentCode, setDocumentCode] = useState("");
   const [saveDate, setSaveDate] = useState("");
@@ -718,8 +719,8 @@ export default function Assets() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-foreground">اسم المستلم <span className="text-red-500">*</span></label>
-                <Select value={form.assigned_to} disabled={!form.department} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.department ? "اختر الموظف" : "اختر القسم أولاً"} /></SelectTrigger>
+                <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
+                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف المستلم" /></SelectTrigger>
                   <SelectContent>
                     {formEmployees.map((e) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}
                   </SelectContent>

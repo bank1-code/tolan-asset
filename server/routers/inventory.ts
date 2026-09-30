@@ -107,10 +107,12 @@ async function validateAssignment(db: any, locationId?: number | null, departmen
     throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد لا يتبع الموقع المختار" });
   }
   if (employeeId) {
-    const [employee] = await db.select({ id: employees.id, departmentId: employees.departmentId })
+    // القسم الوظيفي للموظف مستقل عن قسم وموقع الأصل/العهدة.
+    // نتحقق فقط من وجود الموظف، بينما علاقة القسم بالموقع تم التحقق منها أعلاه.
+    const [employee] = await db.select({ id: employees.id })
       .from(employees).where(eq(employees.id, employeeId)).limit(1);
-    if (!employee || employee.departmentId !== departmentId) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المحدد لا يتبع القسم المختار" });
+    if (!employee) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير موجود" });
     }
   }
 }

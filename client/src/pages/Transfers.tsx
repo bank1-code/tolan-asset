@@ -127,15 +127,13 @@ export default function Transfers() {
   const departments = departmentsData || [];
   const locations_ = locationsData || [];
 
-  // ─── state للنموذج الجديد ──────────────────────────────────────────────────
+  // ─── state لعملية النقل الجديدة ─────────────────────────────────────────────
   const [showNew, setShowNew] = useState(false);
-  const [partialSearch, setPartialSearch] = useState("");
-  const [partialDeptFilter, setPartialDeptFilter] = useState("all");
-  const [partialLocFilter, setPartialLocFilter] = useState("all");
-  const [partialItemId, setPartialItemId] = useState("");
-  const [partialQty, setPartialQty] = useState("1");
-  const [partialFromEmp, setPartialFromEmp] = useState("");
-  const [partialToEmp, setPartialToEmp] = useState("");
+  const [transferSearch, setTransferSearch] = useState("");
+  const [transferItemId, setTransferItemId] = useState("");
+  const [toEmployeeId, setToEmployeeId] = useState("");
+  const [toLocationId, setToLocationId] = useState("");
+  const [toDepartmentId, setToDepartmentId] = useState("");
 
   // ─── state للاستعراض ──────────────────────────────────────────────────────
   const [viewRecord, setViewRecord] = useState<any>(null);
@@ -163,61 +161,84 @@ export default function Transfers() {
     }
   }, [printData]);
 
-  // ─── عناصر النقل الجزئي ───────────────────────────────────────────────────
-  const allPartialItems = useMemo(() => {
-    const assetItems = allAssets.filter((a: any) => a.quantity > 1 && a.status === "ACTIVE").map((a: any) => ({
-      id: a.id, type: "asset" as const,
-      code: a.code || "", name: a.name || "",
-      quantity: a.quantity,
-      departmentName: a.departmentName || "", locationName: a.locationName || "",
-      departmentId: a.departmentId, locationId: a.locationId,
-      label: `${a.code || ""} - ${a.name} (الكمية: ${a.quantity})`,
+  // ─── عناصر قابلة للنقل والبحث بالاسم أو الرمز ───────────────────────────────
+  const transferableItems = useMemo(() => {
+    const assetItems = allAssets.filter((a: any) => a.status === "ACTIVE").map((a: any) => ({
+      id: a.id, type: "asset" as const, code: a.assetCode || "", name: a.assetName || "",
+      quantity: a.quantity || 1, assignedTo: a.assignedTo, employeeName: a.employeeName || "غير محدد",
+      departmentId: a.departmentId, departmentName: a.departmentName || "غير محدد",
+      locationId: a.locationId, locationName: a.locationName || "غير محدد",
     }));
-    const custItems = allCustody.filter((c: any) => c.quantity > 1 && c.status === "ACTIVE").map((c: any) => ({
-      id: c.id, type: "custody" as const,
-      code: c.code || "", name: c.name || "",
-      quantity: c.quantity,
-      departmentName: c.departmentName || "", locationName: c.locationName || "",
-      departmentId: c.departmentId, locationId: c.locationId,
-      label: `${c.code || ""} - ${c.name} (الكمية: ${c.quantity})`,
+    const custodyItems = allCustody.filter((c: any) => c.status === "ACTIVE").map((c: any) => ({
+      id: c.id, type: "custody" as const, code: c.code || "", name: c.name || "",
+      quantity: c.quantity || 1, assignedTo: c.assignedTo, employeeName: c.employeeName || "غير محدد",
+      departmentId: c.departmentId, departmentName: c.departmentName || "غير محدد",
+      locationId: c.locationId, locationName: c.locationName || "غير محدد",
     }));
-    return [...assetItems, ...custItems];
+    return [...assetItems, ...custodyItems];
   }, [allAssets, allCustody]);
 
-  const filteredPartialItems = useMemo(() => {
-    return allPartialItems.filter(item => {
-      if (partialSearch.trim()) {
-        const q = partialSearch.toLowerCase();
-        if (!(item.name || "").toLowerCase().includes(q) && !(item.code || "").toLowerCase().includes(q)) return false;
-      }
-      if (partialDeptFilter !== "all" && String(item.departmentId) !== partialDeptFilter) return false;
-      if (partialLocFilter !== "all" && String(item.locationId) !== partialLocFilter) return false;
-      return true;
-    });
-  }, [allPartialItems, partialSearch, partialDeptFilter, partialLocFilter]);
+  const filteredTransferItems = useMemo(() => {
+    const q = transferSearch.trim().toLowerCase();
+    if (!q) return transferableItems;
+    return transferableItems.filter((item) =>
+      item.name.toLowerCase().includes(q) || item.code.toLowerCase().includes(q)
+    );
+  }, [transferableItems, transferSearch]);
 
-  const resetPartialFilters = () => { setPartialSearch(""); setPartialDeptFilter("all"); setPartialLocFilter("all"); };
-  const hasActivePartialFilters = partialSearch.trim() !== "" || partialDeptFilter !== "all" || partialLocFilter !== "all";
+  const selectedTransferItem = useMemo(() => {
+    if (!transferItemId) return null;
+    const [type, id] = transferItemId.split("-");
+    return transferableItems.find((item) => item.type === type && item.id === Number(id)) || null;
+  }, [transferItemId, transferableItems]);
 
-  // ─── تنفيذ النقل الجزئي ───────────────────────────────────────────────────
-  const handlePartialTransfer = async (e: React.FormEvent) => {
+  const destinationDepartments = useMemo(() =>
+    departments.filter((d: any) => toLocationId && String(d.locationId) === toLocationId),
+  [departments, toLocationId]);
+
+  const handleSelectTransferItem = (value: string) => {
+    setTransferItemId(value);
+    const [type, id] = value.split("-");
+    const item = transferableItems.find((x) => x.type === type && x.id === Number(id));
+    setToEmployeeId("");
+    setToLocationId(item?.locationId ? String(item.locationId) : "");
+    setToDepartmentId(item?.departmentId ? String(item.departmentId) : "");
+  };
+
+  const handleLocationChange = (value: string) => {
+    setToLocationId(value);
+    // إذا تغير الموقع، يجب اختيار قسم تابع للموقع الجديد.
+    if (!departments.some((d: any) => String(d.id) === toDepartmentId && String(d.locationId) === value)) {
+      setToDepartmentId("");
+    }
+  };
+
+  const resetTransferForm = () => {
+    setTransferSearch(""); setTransferItemId(""); setToEmployeeId("");
+    setToLocationId(""); setToDepartmentId("");
+  };
+
+  // ─── تنفيذ النقل ───────────────────────────────────────────────────────────
+  const handleTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!partialItemId || !partialToEmp) { toast.error("يرجى تعبئة جميع الحقول المطلوبة"); return; }
-    const [type, id] = partialItemId.split("-");
+    if (!selectedTransferItem || !toEmployeeId || !toLocationId || !toDepartmentId) {
+      toast.error("يرجى اختيار الأصل/العهدة والموظف والموقع والقسم الجديد"); return;
+    }
     try {
       await createTransfer.mutateAsync({
-        entityType: type as "asset" | "custody",
-        entityId: Number(id),
+        entityType: selectedTransferItem.type,
+        entityId: selectedTransferItem.id,
         movementType: "partial",
-        fromEmployeeId: partialFromEmp ? Number(partialFromEmp) : null,
-        toEmployeeId: Number(partialToEmp),
-        quantity: Number(partialQty) || 1,
+        fromEmployeeId: selectedTransferItem.assignedTo || null,
+        toEmployeeId: Number(toEmployeeId),
+        toLocationId: Number(toLocationId),
+        toDepartmentId: Number(toDepartmentId),
+        quantity: selectedTransferItem.quantity,
         notes: null,
       });
-      toast.success("تم النقل الجزئي بنجاح");
+      toast.success("تم نقل الأصل/العهدة وتحديث الموظف والموقع والقسم بنجاح");
       setShowNew(false);
-      resetPartialFilters();
-      setPartialItemId(""); setPartialQty("1"); setPartialFromEmp(""); setPartialToEmp("");
+      resetTransferForm();
     } catch (error: any) {
       toast.error(error.message || "حدث خطأ أثناء النقل");
     }
@@ -368,8 +389,8 @@ export default function Transfers() {
         </div>
       </div>
 
-      {/* ─── نافذة عملية نقل جديدة (جزئي فقط) ─────────────────────────────── */}
-      <Dialog open={showNew} onOpenChange={setShowNew}>
+      {/* ─── نافذة عملية نقل جديدة ─────────────────────────────────────────── */}
+      <Dialog open={showNew} onOpenChange={(open) => { setShowNew(open); if (!open) resetTransferForm(); }}>
         <DialogContent className="max-w-2xl" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
@@ -378,132 +399,82 @@ export default function Transfers() {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="mt-2">
-            <p className="text-xs mb-4 bg-purple-50 text-purple-700 p-3 rounded-lg">
-              النقل الجزئي: يتم نقل جزء من الكمية مع إنشاء سجل جديد برمز مختلف للكمية المنقولة.
-            </p>
-            <form className="space-y-4" onSubmit={handlePartialTransfer}>
-              {/* البحث والفلاتر */}
-              <div className="bg-muted/20 border border-border/60 rounded-xl p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Filter className="w-3.5 h-3.5 text-primary" />
-                    <span className="text-xs font-bold text-foreground">بحث وتصفية</span>
-                  </div>
-                  {hasActivePartialFilters && (
-                    <button type="button" onClick={resetPartialFilters} className="text-[10px] text-red-500 hover:text-red-700 underline">
-                      تصفير الفلاتر
-                    </button>
-                  )}
-                </div>
-                <div className="relative">
-                  <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
-                  <input
-                    value={partialSearch}
-                    onChange={(e) => setPartialSearch(e.target.value)}
-                    placeholder="ابحث بالاسم أو الرمز..."
-                    className="w-full h-9 pr-10 pl-3 rounded-lg bg-white border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1">
-                      <Building2 className="w-3 h-3" /> القسم
-                    </label>
-                    <Select value={partialDeptFilter} onValueChange={setPartialDeptFilter}>
-                      <SelectTrigger className="h-9 text-xs bg-white"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">الكل</SelectItem>
-                        {departments.map((d: any) => (
-                          <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-muted-foreground flex items-center gap-1">
-                      <MapPin className="w-3 h-3" /> الموقع
-                    </label>
-                    <Select value={partialLocFilter} onValueChange={setPartialLocFilter}>
-                      <SelectTrigger className="h-9 text-xs bg-white"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">الكل</SelectItem>
-                        {locations_.map((l: any) => (
-                          <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">
-                  العنصر <span className="text-muted-foreground font-normal">({filteredPartialItems.length} عنصر{hasActivePartialFilters ? " مطابق" : ""})</span>
-                </label>
-                <Select value={partialItemId} onValueChange={setPartialItemId}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الأصل أو العهدة" /></SelectTrigger>
-                  <SelectContent>
-                    {filteredPartialItems.length === 0 ? (
-                      <div className="py-4 text-center text-xs text-muted-foreground">لا توجد نتائج مطابقة</div>
-                    ) : (
-                      filteredPartialItems.map((item) => (
-                        <SelectItem key={`${item.type}-${item.id}`} value={`${item.type}-${item.id}`}>
-                          <span className="flex items-center gap-2">
-                            <span className={`inline-block w-1.5 h-1.5 rounded-full ${item.type === "asset" ? "bg-teal-500" : "bg-amber-500"}`} />
-                            {item.label}
-                          </span>
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">الكمية المراد نقلها</label>
+          <form className="space-y-4 mt-2" onSubmit={handleTransfer}>
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-foreground">البحث عن الأصل أو العهدة</label>
+              <div className="relative">
+                <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
                 <input
-                  type="number" min="1" value={partialQty}
-                  onChange={(e) => setPartialQty(e.target.value)}
-                  placeholder="أدخل الكمية"
-                  className="w-full h-10 px-3 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
+                  value={transferSearch}
+                  onChange={(e) => setTransferSearch(e.target.value)}
+                  placeholder="ابحث باسم الأصل/العهدة أو الرمز..."
+                  className="w-full h-10 pr-10 pl-3 rounded-lg bg-white border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
+              <Select value={transferItemId} onValueChange={handleSelectTransferItem}>
+                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر من نتائج البحث" /></SelectTrigger>
+                <SelectContent>
+                  {filteredTransferItems.length === 0 ? (
+                    <div className="py-4 text-center text-xs text-muted-foreground">لا توجد نتائج مطابقة</div>
+                  ) : filteredTransferItems.map((item) => (
+                    <SelectItem key={`${item.type}-${item.id}`} value={`${item.type}-${item.id}`}>
+                      {item.type === "asset" ? "أصل" : "عهدة"} — {item.code || "بدون رمز"} — {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-              <div className="grid grid-cols-2 gap-4">
+            {selectedTransferItem && (
+              <div className="rounded-xl border border-border bg-muted/20 p-4">
+                <p className="text-xs font-bold text-foreground mb-3">البيانات الحالية</p>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                  <div><span className="text-muted-foreground">الاسم</span><p className="font-semibold mt-1">{selectedTransferItem.name}</p></div>
+                  <div><span className="text-muted-foreground">الرمز</span><p className="font-semibold mt-1">{selectedTransferItem.code || "—"}</p></div>
+                  <div><span className="text-muted-foreground">الموظف الحالي</span><p className="font-semibold mt-1">{selectedTransferItem.employeeName}</p></div>
+                  <div><span className="text-muted-foreground">الموقع الحالي</span><p className="font-semibold mt-1">{selectedTransferItem.locationName}</p></div>
+                  <div><span className="text-muted-foreground">القسم الحالي</span><p className="font-semibold mt-1">{selectedTransferItem.departmentName}</p></div>
+                  <div><span className="text-muted-foreground">الكمية</span><p className="font-semibold mt-1">{selectedTransferItem.quantity}</p></div>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+              <p className="text-xs font-bold text-foreground">بيانات النقل الجديدة</p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-foreground">من (الموظف الحالي)</label>
-                  <Select value={partialFromEmp} onValueChange={setPartialFromEmp}>
-                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="الموظف الحالي" /></SelectTrigger>
-                    <SelectContent>
-                      {employees.map((e: any) => (
-                        <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>
-                      ))}
-                    </SelectContent>
+                  <label className="text-xs font-bold">الموظف الجديد</label>
+                  <Select value={toEmployeeId} onValueChange={setToEmployeeId} disabled={!selectedTransferItem}>
+                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الموظف" /></SelectTrigger>
+                    <SelectContent>{employees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-foreground">إلى (الموظف الجديد) <span className="text-red-500">*</span></label>
-                  <Select value={partialToEmp} onValueChange={setPartialToEmp}>
-                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف" /></SelectTrigger>
-                    <SelectContent>
-                      {employees.map((e: any) => (
-                        <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>
-                      ))}
-                    </SelectContent>
+                  <label className="text-xs font-bold">الموقع الجديد</label>
+                  <Select value={toLocationId} onValueChange={handleLocationChange} disabled={!selectedTransferItem}>
+                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الموقع" /></SelectTrigger>
+                    <SelectContent>{locations_.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold">القسم الجديد</label>
+                  <Select value={toDepartmentId} onValueChange={setToDepartmentId} disabled={!toLocationId}>
+                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر القسم" /></SelectTrigger>
+                    <SelectContent>{destinationDepartments.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
               </div>
+              <p className="text-[11px] text-muted-foreground">الموظف الجديد مستقل عن قسمه الوظيفي؛ الموقع والقسم هنا يخصان الأصل أو العهدة المنقولة.</p>
+            </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="outline" onClick={() => setShowNew(false)}>إلغاء</Button>
-                <Button type="submit" disabled={createTransfer.isPending}>
-                  {createTransfer.isPending ? <Loader2 className="w-4 h-4 animate-spin ml-2" /> : null}
-                  تنفيذ النقل الجزئي
-                </Button>
-              </div>
-            </form>
-          </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setShowNew(false)}>إلغاء</Button>
+              <Button type="submit" disabled={createTransfer.isPending || !selectedTransferItem}>
+                {createTransfer.isPending ? <Loader2 className="w-4 h-4 animate-spin ml-2" /> : null}
+                تنفيذ النقل
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
 
