@@ -458,15 +458,19 @@ export const excelRouter = router({
       // الاستيراد الأولي للموظفين لا يتطلب قسماً أو موقعاً.
       // يتم ربط الموظف بالقسم يدوياً لاحقاً من شاشة الإعدادات.
       const existingEmployees = await db
-        .select({ fingerprintId: employees.fingerprintId })
+        .select({
+          id: employees.id,
+          fingerprintId: employees.fingerprintId,
+        })
         .from(employees);
-      const knownFingerprintIds = new Set(
+      const employeesByFingerprint = new Map(
         existingEmployees
-          .map((employee) => employee.fingerprintId?.trim())
-          .filter((value): value is string => Boolean(value))
+          .filter((employee) => Boolean(employee.fingerprintId?.trim()))
+          .map((employee) => [employee.fingerprintId!.trim(), employee])
       );
 
       let imported = 0;
+      let updated = 0;
       let skipped = 0;
       const errors: string[] = [];
 
@@ -477,11 +481,23 @@ export const excelRouter = router({
           const fingerprintId = row.fingerprintId?.trim();
           const nationalId = row.nationalId?.trim() || null;
 
-          if (!fullName) throw new Error("اسم الموظف مطلوب");
           if (!fingerprintId) throw new Error("رقم البصمة / الرقم الوظيفي مطلوب");
-          if (knownFingerprintIds.has(fingerprintId)) {
-            throw new Error(`رقم البصمة ${fingerprintId} موجود مسبقاً`);
+
+          const existingEmployee = employeesByFingerprint.get(fingerprintId);
+          if (existingEmployee) {
+            if (!nationalId) throw new Error("رقم الهوية مطلوب لتحديث الموظف الموجود");
+
+            // الموظف موجود مسبقاً: نحدّث رقم الهوية فقط، دون المساس
+            // بالاسم أو القسم أو الهاتف أو أي بيانات أخرى.
+            await db
+              .update(employees)
+              .set({ nationalId })
+              .where(eq(employees.id, existingEmployee.id));
+            updated++;
+            continue;
           }
+
+          if (!fullName) throw new Error("اسم الموظف مطلوب للموظف الجديد");
 
           await db.insert(employees).values({
             fullName,
@@ -490,7 +506,6 @@ export const excelRouter = router({
             nationalId,
             phone: null,
           });
-          knownFingerprintIds.add(fingerprintId);
           imported++;
         } catch (err: any) {
           errors.push(`صف ${i + 2}: ${err.message}`);
@@ -501,13 +516,13 @@ export const excelRouter = router({
       await logAuditAction({
         tableName: "employees",
         actionType: "IMPORT",
-        actionDescription: `استيراد موظفين من Excel: ${imported} ناجح، ${skipped} تم تخطيه`,
+        actionDescription: `استيراد موظفين من Excel: ${imported} جديد، ${updated} تم تحديثه، ${skipped} تم تخطيه`,
         performedBy: ctx.user?.id,
         performedByName: ctx.user?.name || "مستخدم",
         ipAddress: ctx.req?.ip || "unknown",
       });
 
-      return { imported, skipped, errors, total: rows.length };
+      return { imported, updated, skipped, errors, total: rows.length };
     }),
 
   // ==========================================
