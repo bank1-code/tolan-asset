@@ -229,12 +229,23 @@ export const excelRouter = router({
             continue;
           }
 
-          const location = allLocs.find(l => l.name === row.locationName);
-          if (!location) throw new Error("الموقع غير موجود أو غير محدد");
-          const department = allDepts.find(d => d.name === row.departmentName && d.locationId === location.id);
-          if (!department) throw new Error("القسم لا يتبع الموقع المحدد أو غير موجود");
-          const employee = allEmployees.find(e => e.fullName === row.employeeName && e.departmentId === department.id);
-          if (!employee) throw new Error("الموظف لا يتبع القسم المحدد أو غير موجود");
+          const locationName = String(row.locationName || "").trim();
+          const departmentName = String(row.departmentName || "").trim();
+          const employeeName = String(row.employeeName || "").trim();
+
+          const location = allLocs.find(l => String(l.name || "").trim() === locationName);
+          if (!location) throw new Error(`الموقع "${locationName || "غير محدد"}" غير موجود`);
+
+          const department = allDepts.find(
+            d => String(d.name || "").trim() === departmentName && d.locationId === location.id
+          );
+          if (!department) {
+            throw new Error(`القسم "${departmentName || "غير محدد"}" غير موجود أو لا يتبع الموقع "${locationName}"`);
+          }
+
+          // الموظف مستقل عن قسم وموقع الأصل/العهدة؛ يكفي أن يكون موجوداً في سجل الموظفين.
+          const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
+          if (!employee) throw new Error(`الموظف "${employeeName || "غير محدد"}" غير موجود`);
 
           await db.insert(assets).values({
             assetName: row.assetName,
@@ -347,12 +358,23 @@ export const excelRouter = router({
             continue;
           }
 
-          const location = allLocs.find(l => l.name === row.locationName);
-          if (!location) throw new Error("الموقع غير موجود أو غير محدد");
-          const department = allDepts.find(d => d.name === row.departmentName && d.locationId === location.id);
-          if (!department) throw new Error("القسم لا يتبع الموقع المحدد أو غير موجود");
-          const employee = allEmployees.find(e => e.fullName === row.employeeName && e.departmentId === department.id);
-          if (!employee) throw new Error("الموظف لا يتبع القسم المحدد أو غير موجود");
+          const locationName = String(row.locationName || "").trim();
+          const departmentName = String(row.departmentName || "").trim();
+          const employeeName = String(row.employeeName || "").trim();
+
+          const location = allLocs.find(l => String(l.name || "").trim() === locationName);
+          if (!location) throw new Error(`الموقع "${locationName || "غير محدد"}" غير موجود`);
+
+          const department = allDepts.find(
+            d => String(d.name || "").trim() === departmentName && d.locationId === location.id
+          );
+          if (!department) {
+            throw new Error(`القسم "${departmentName || "غير محدد"}" غير موجود أو لا يتبع الموقع "${locationName}"`);
+          }
+
+          // الموظف مستقل عن قسم وموقع الأصل/العهدة؛ يكفي أن يكون موجوداً في سجل الموظفين.
+          const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
+          if (!employee) throw new Error(`الموظف "${employeeName || "غير محدد"}" غير موجود`);
 
           await db.insert(custodyItems).values({
             name: row.name,
