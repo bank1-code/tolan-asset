@@ -1,10 +1,15 @@
+import { escapeHtml } from "@shared/html";
+import { canApprove as hasApprovalRole, canOperate as hasOperatorRole } from "@shared/roles";
+import { remainingQuantity } from "@shared/inventoryQuantity";
 /*
  * Design: Calm Luxury - إدارة الأصول
  * مربوطة بالـ API الحقيقي عبر tRPC
  */
+import { openArchiveReport } from "@/lib/archiveReport";
 import DashboardLayout from "@/components/DashboardLayout";
 import DataTable from "@/components/DataTable";
 import StatusBadge from "@/components/StatusBadge";
+import { InventoryApprovalDialog } from "@/components/InventoryApprovalDialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,7 +43,7 @@ import {
   X,
   ZoomIn,
 } from "lucide-react";
-import { useRef, useState, useMemo } from "react";
+import { useRef, useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { AssetsExcelButtons } from "@/components/ExcelButtons";
@@ -46,11 +51,34 @@ import { useAuth } from "@/_core/hooks/useAuth";
 
 const ASSET_CONDITIONS = ["جيد جدًا", "جيد", "متهالك"];
 
+function getMonthlyCodePreview(
+  prefix: string | null | undefined,
+  sequence: number | null | undefined,
+  sequencePeriod: string | null | undefined
+) {
+  if (!prefix) return null;
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh",
+    month: "2-digit",
+    year: "2-digit",
+  }).formatToParts(new Date());
+  const month = parts.find((part) => part.type === "month")?.value ?? "01";
+  const year = parts.find((part) => part.type === "year")?.value ?? "00";
+  const period = `${month}${year}`;
+  const nextSequence = sequencePeriod === period ? Number(sequence || 0) + 1 : 1;
+  const serial = String(nextSequence).padStart(2, "0");
+
+  return `${prefix}-${period}${serial}`;
+}
+
+
 interface AssetFormData {
   asset_name: string;
   asset_code: string;
   quantity: string;
   asset_value: string;
+  classification_id: string;
   assigned_to: string;
   department: string;
   branch: string;
@@ -66,6 +94,7 @@ const emptyForm: AssetFormData = {
   asset_code: "",
   quantity: "1",
   asset_value: "",
+  classification_id: "",
   assigned_to: "",
   department: "",
   branch: "",
@@ -91,42 +120,62 @@ function fileToBase64(file: File): Promise<string> {
 export default function Assets() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
-  const canDelete = user?.role === "owner" || user?.role === "admin";
+  const canApprove = hasApprovalRole(user?.role);
+  const canOperate = hasOperatorRole(user?.role);
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterDept, setFilterDept] = useState("all");
   const [filterLocation, setFilterLocation] = useState("all");
 
+  const [tablePage, setTablePage] = useState(1);
+  const [tableSearch, setTableSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => { const timer = setTimeout(() => setDebouncedSearch(tableSearch), 300); return () => clearTimeout(timer); }, [tableSearch]);
+  useEffect(() => setTablePage(1), [filterDept, filterLocation, filterStatus, debouncedSearch]);
   const apiFilters = useMemo(() => ({
+    search: debouncedSearch || undefined,
     departmentId: filterDept !== "all" ? Number(filterDept) : undefined,
     locationId: filterLocation !== "all" ? Number(filterLocation) : undefined,
     status: filterStatus !== "all" ? filterStatus : undefined,
-  }), [filterDept, filterLocation, filterStatus]);
+  }), [filterDept, filterLocation, filterStatus, debouncedSearch]);
 
-  const { data: assetsData, isLoading } = trpc.inventory.assets.list.useQuery(apiFilters);
+  const { data: assetsData, isLoading } = trpc.inventory.assets.list.useQuery({...apiFilters, limit: 50, offset: (tablePage - 1) * 50});
+  const {data: tableTotal = 0} = trpc.inventory.assets.count.useQuery(apiFilters);
+  useEffect(() => { if (tableTotal > 0 && tablePage > Math.ceil(tableTotal / 50)) setTablePage(Math.ceil(tableTotal / 50)); }, [tableTotal, tablePage]);
   const { data: departmentsData } = trpc.settings.departments.list.useQuery();
   const { data: locationsData } = trpc.settings.locations.list.useQuery();
   const { data: branchesData } = trpc.settings.branches.list.useQuery();
+  const { data: financialClasses = [] } = trpc.depreciation.classifications.useQuery();
   const { data: employeesData } = trpc.settings.employees.list.useQuery();
 
   const utils = trpc.useUtils();
   const createAsset = trpc.inventory.assets.create.useMutation({
-    onSuccess: () => {
-      utils.inventory.assets.list.invalidate();
-      utils.records.reports.dashboard.invalidate();
+    onSuccess: async () => {
+      await Promise.all([utils.inventory.assets.invalidate(), utils.records.reports.dashboard.invalidate(), utils.settings.locations.list.invalidate()]);
     },
   });
   const updateAsset = trpc.inventory.assets.update.useMutation({
-    onSuccess: () => {
-      utils.inventory.assets.list.invalidate();
-      utils.records.reports.dashboard.invalidate();
+    onSuccess: async () => {
+      await Promise.all([utils.inventory.assets.invalidate(), utils.records.reports.dashboard.invalidate()]);
     },
   });
-  const deleteAsset = trpc.inventory.assets.delete.useMutation({
-    onSuccess: () => {
-      utils.inventory.assets.list.invalidate();
-      utils.records.reports.dashboard.invalidate();
+  const cancelAssetDraft = trpc.inventory.assets.cancelDraft.useMutation({
+    onSuccess: async () => {
+      await Promise.all([utils.inventory.assets.invalidate(), utils.records.reports.dashboard.invalidate()]);
     },
   });
+  const approveDraft = trpc.inventory.assets.approve.useMutation();
+  const [approvalCandidate, setApprovalCandidate] = useState<any>(null);
+  const requestChanges = trpc.inventory.assets.requestChanges.useMutation();
+  const refreshDrafts = async () => { await utils.inventory.assets.invalidate(); await utils.records.reports.dashboard.invalidate(); await utils.settings.locations.list.invalidate(); setShowView(null); };
+  const handleApprove = (record: any) => setApprovalCandidate(record);
+  const confirmApproval = async () => {
+    if (!approvalCandidate || approveDraft.isPending) return;
+    try { const result = await approveDraft.mutateAsync({ id: approvalCandidate.id, expectedVersion: approvalCandidate.draftVersion }); setApprovalCandidate(null); await refreshDrafts(); toast.success(`تم الاعتماد بالرقم: ${result.code}`); } catch (error: any) { toast.error(error.message); }
+  };
+  const handleRequestChanges = async (record: any) => {
+    const note = prompt("اكتب الملاحظات المطلوبة لتصحيح المسودة:"); if (!note?.trim()) return;
+    try { await requestChanges.mutateAsync({ id: record.id, expectedVersion: record.draftVersion, note }); await refreshDrafts(); toast.success("تم حفظ ملاحظات المراجعة"); } catch (error: any) { toast.error(error.message); }
+  };
   const uploadImage = trpc.upload.image.useMutation();
 
   const assets = assetsData || [];
@@ -165,49 +214,7 @@ export default function Assets() {
   const prevArchivePrintId = useRef<number | null>(null);
   if (archivePrintId !== null && archiveDocForPrint !== undefined && archivePrintId !== prevArchivePrintId.current) {
     prevArchivePrintId.current = archivePrintId;
-    // طباعة ورقة من بيانات الأصل الحالي
-    const asset = assets.find((a: any) => a.id === archivePrintId);
-    if (asset) {
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        const now = new Date().toLocaleDateString("ar-SA");
-        const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>وثيقة أصل</title>
-          <style>
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; margin: 40px; color: #1a1a2e; }
-            .header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 3px solid #0d9488; margin-bottom: 20px; }
-            .header .date { color: #64748b; font-size: 13px; }
-            .header .doc-code { background: #f0fdfa; color: #0d9488; padding: 4px 12px; border-radius: 6px; font-weight: 700; font-size: 13px; }
-            h2 { color: #0d9488; text-align: center; margin: 16px 0; font-size: 20px; }
-            table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-            th, td { border: 1px solid #e2e8f0; padding: 10px 14px; text-align: right; font-size: 14px; }
-            th { background: #f8fafc; color: #64748b; font-weight: 700; width: 30%; }
-            td { color: #1a1a2e; }
-            .footer { text-align: center; margin-top: 30px; color: #94a3b8; font-size: 11px; }
-            @media print { body { margin: 20px; } }
-          </style></head><body>
-          <div class="header">
-            <div class="doc-code">${asset.assetCode || "-"}</div>
-            <div class="date">${now}</div>
-          </div>
-          <h2>وثيقة أصل – من الأرشيف</h2>
-          <table>
-            <tr><th>اسم الأصل</th><td>${asset.assetName}</td></tr>
-            <tr><th>رمز الأصل</th><td>${asset.assetCode || "-"}</td></tr>
-            <tr><th>الكمية</th><td>${asset.quantity}</td></tr>
-            <tr><th>قيمة الأصل</th><td>${Number(asset.assetValue || 0).toLocaleString("ar-SA")} ر.س</td></tr>
-            <tr><th>اسم المستلم</th><td>${asset.employeeName || "-"}</td></tr>
-            <tr><th>القسم</th><td>${asset.departmentName || "-"}</td></tr>
-            <tr><th>الموقع</th><td>${asset.locationName || "-"}</td></tr>
-            <tr><th>الحالة</th><td>${asset.condition || "-"}</td></tr>
-            <tr><th>ملاحظات</th><td>${asset.notes || "-"}</td></tr>
-          </table>
-          <div class="footer">وثيقة من الأرشيف | تاريخ: ${now}</div>
-        </body></html>`;
-        printWindow.document.write(html);
-        printWindow.document.close();
-        setTimeout(() => printWindow.print(), 500);
-      }
-    }
+    if (archiveDocForPrint) openArchiveReport(archiveDocForPrint); else toast.warning("لا توجد وثيقة محفوظة لهذا السجل");
     setTimeout(() => setArchivePrintId(null), 100);
   }
 
@@ -215,9 +222,9 @@ export default function Assets() {
   const invoiceImageRef = useRef<HTMLInputElement>(null);
 
   const columns = [
-    { key: "assetCode", label: "رمز الأصل", className: "font-mono text-xs font-bold text-primary" as string },
+    { key: "assetCode", render: (record: any) => record.assetCode || `مسودة #${record.id}`, label: "رمز الأصل", className: "font-mono text-xs font-bold text-primary" as string },
     { key: "assetName", label: "اسم الأصل", render: (a: any) => <span className="font-medium">{a.assetName}</span> },
-    { key: "quantity", label: "الكمية", className: "text-center" as string, render: (a: any) => <span className="text-center block">{a.quantity}</span> },
+    { key: "quantity", label: "الأصلية / المستبعد / المستبدل / المتبقي", className: "text-center" as string, render: (a: any) => <span className="text-center block">{a.quantity} / {a.excludedQuantity || 0} / {a.warrantyReplacedQuantity || 0} / {Math.max(0, remainingQuantity(a))}</span> },
     {
       key: "assetValue",
       label: "قيمة الأصل",
@@ -286,11 +293,10 @@ export default function Assets() {
       toast.error("اسم الأصل حقل إلزامي");
       return;
     }
-    if (!form.asset_code.trim()) {
-      toast.error("رمز الأصل حقل إلزامي");
+    if (!Number.isSafeInteger(Number(form.quantity)) || Number(form.quantity) < 1) {
+      toast.error("الكمية يجب أن تكون عددًا صحيحًا أكبر من صفر");
       return;
     }
-    if (!form.location || !form.department || !form.assigned_to) { toast.error("يرجى اختيار الموقع ثم القسم ثم الموظف"); return; }
     try {
       setIsUploading(true);
 
@@ -309,11 +315,10 @@ export default function Assets() {
         setUploadedInvoiceImageUrl(invoiceImageUrl);
       }
 
-      await createAsset.mutateAsync({
+      const created = await createAsset.mutateAsync({
         assetName: form.asset_name,
-        assetCode: form.asset_code,
-        quantity: Number(form.quantity) || 1,
-        assetValue: form.asset_value || "0",
+        quantity: Number(form.quantity),
+        assetValue: form.asset_value || "0", classificationId: form.classification_id ? Number(form.classification_id) : null,
         condition: form.condition,
         assignedTo: Number(form.assigned_to),
         departmentId: Number(form.department),
@@ -327,16 +332,19 @@ export default function Assets() {
       const date = new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "2-digit", day: "2-digit" });
       setDocumentCode(code);
       setSaveDate(date);
-      setSavedData({ ...form });
+      setForm((f) => ({ ...f, asset_code: "" }));
+      setSavedData(null);
       toast.success(
         <div className="space-y-1">
-          <p className="font-bold">تمت إضافة الأصل بنجاح</p>
-          <p className="text-xs opacity-80">الرقم الورقي: {code}</p>
+          <p className="font-bold">تم حفظ المسودة بنجاح</p>
+          <p className="text-xs opacity-80">مرجع المسودة: #{created.id} — الرقم الرسمي عند الاعتماد</p>
+
           {(assetImageUrl || invoiceImageUrl) && (
             <p className="text-xs opacity-80">تم رفع الصور بصيغة WebP</p>
           )}
         </div>
       );
+      resetForm();
     } catch (error: any) {
       toast.error(error.message || "حدث خطأ أثناء الحفظ");
     } finally {
@@ -347,6 +355,10 @@ export default function Assets() {
   const handleUpdate = async () => {
     if (!editingAsset || !form.asset_name.trim()) {
       toast.error("اسم الأصل حقل إلزامي");
+      return;
+    }
+    if (!Number.isSafeInteger(Number(form.quantity)) || Number(form.quantity) < 1) {
+      toast.error("الكمية يجب أن تكون عددًا صحيحًا أكبر من صفر");
       return;
     }
     try {
@@ -367,13 +379,12 @@ export default function Assets() {
         setUploadedInvoiceImageUrl(invoiceImageUrl);
       }
 
-      if (!form.location || !form.department || !form.assigned_to) { toast.error("يرجى اختيار الموقع ثم القسم ثم الموظف"); return; }
       await updateAsset.mutateAsync({
-        id: editingAsset.id,
+        id: editingAsset.id, expectedVersion: editingAsset.draftVersion,
         assetName: form.asset_name,
-        assetCode: form.asset_code || null,
-        quantity: Number(form.quantity) || 1,
-        assetValue: form.asset_value || "0",
+        assetCode: editingAsset.assetCode || null,
+        quantity: Number(form.quantity),
+        assetValue: form.asset_value || "0", classificationId: form.classification_id ? Number(form.classification_id) : null,
         condition: form.condition,
         assignedTo: Number(form.assigned_to),
         departmentId: Number(form.department),
@@ -382,7 +393,7 @@ export default function Assets() {
         assetImagePath: assetImageUrl,
         invoiceImagePath: invoiceImageUrl,
       });
-      toast.success("تم تعديل الأصل بنجاح");
+      toast.success("تم تعديل المسودة بنجاح");
       resetForm();
     } catch (error: any) {
       toast.error(error.message || "حدث خطأ أثناء التعديل");
@@ -391,23 +402,25 @@ export default function Assets() {
     }
   };
 
-  const handleDelete = async (asset: any) => {
-    if (!confirm(`هل أنت متأكد من حذف الأصل "${asset.assetName}"؟`)) return;
+  const handleCancelDraft = async (asset: any) => {
+    if (!confirm("إلغاء المسودة مع الاحتفاظ بسجلها؟")) return;
     try {
-      await deleteAsset.mutateAsync({ id: asset.id });
-      toast.success("تم حذف الأصل بنجاح");
+      await cancelAssetDraft.mutateAsync({ id: asset.id, expectedVersion: asset.draftVersion });
+      toast.success("تم إلغاء المسودة");
     } catch (error: any) {
-      toast.error(error.message || "حدث خطأ أثناء الحذف");
+      toast.error(error.message || "حدث خطأ أثناء الإلغاء");
     }
   };
 
   const startEdit = (asset: any) => {
+    if (asset.status !== "DRAFT" || !canOperate) { toast.error("التعديل متاح للمسودات فقط"); return; }
     setEditingAsset(asset);
     setForm({
       asset_name: asset.assetName,
       asset_code: asset.assetCode || "",
       quantity: String(asset.quantity),
       asset_value: String(asset.assetValue || ""),
+      classification_id: asset.classificationId ? String(asset.classificationId) : "",
       assigned_to: asset.assignedTo ? String(asset.assignedTo) : "",
       department: asset.departmentId ? String(asset.departmentId) : "",
       branch: asset.branchId ? String(asset.branchId) : "",
@@ -436,17 +449,17 @@ export default function Assets() {
 
     // إضافة الصور في الطباعة
     const assetImgHtml = uploadedAssetImageUrl
-      ? `<div class="image-section"><h3>صورة الأصل</h3><img src="${uploadedAssetImageUrl}" alt="صورة الأصل" /></div>`
+      ? `<div class="image-section"><h3>صورة الأصل</h3><img src="${escapeHtml(uploadedAssetImageUrl)}" alt="صورة الأصل" /></div>`
       : "";
     const invoiceImgHtml = uploadedInvoiceImageUrl
-      ? `<div class="image-section"><h3>صورة الفاتورة</h3><img src="${uploadedInvoiceImageUrl}" alt="صورة الفاتورة" /></div>`
+      ? `<div class="image-section"><h3>صورة الفاتورة</h3><img src="${escapeHtml(uploadedInvoiceImageUrl)}" alt="صورة الفاتورة" /></div>`
       : "";
 
     const html = `
     <html lang="ar" dir="rtl">
     <head>
       <meta charset="utf-8">
-      <title>كشف إضافة أصل جديد - ${documentCode}</title>
+      <title>كشف إضافة أصل جديد - ${escapeHtml(documentCode)}</title>
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -472,20 +485,20 @@ export default function Assets() {
     </head>
     <body>
       <div class="header">
-        <div class="doc-code">${documentCode}</div>
-        <div class="date">${saveDate}</div>
+        <div class="doc-code">${escapeHtml(documentCode)}</div>
+        <div class="date">${escapeHtml(saveDate)}</div>
       </div>
       <h2>كشف إضافة أصل جديد</h2>
       <table>
-        <tr><th>اسم الأصل</th><td>${savedData.asset_name}</td></tr>
-        <tr><th>رمز الأصل</th><td>${savedData.asset_code}</td></tr>
-        <tr><th>الكمية</th><td>${savedData.quantity}</td></tr>
-        <tr><th>قيمة الأصل</th><td>${savedData.asset_value ? Number(savedData.asset_value).toLocaleString("ar-SA") + " ر.س" : "-"}</td></tr>
-        <tr><th>اسم المستلم</th><td>${empName}</td></tr>
-        <tr><th>القسم</th><td>${deptName}</td></tr>
-        <tr><th>موقع الأصل</th><td>${locName}</td></tr>
-        <tr><th>حالة الأصل</th><td>${savedData.condition}</td></tr>
-        <tr><th>ملاحظات</th><td>${savedData.notes || "-"}</td></tr>
+        <tr><th>اسم الأصل</th><td>${escapeHtml(savedData.asset_name)}</td></tr>
+        <tr><th>رمز الأصل</th><td>${escapeHtml(savedData.asset_code)}</td></tr>
+        <tr><th>الكمية</th><td>${escapeHtml(savedData.quantity)}</td></tr>
+        <tr><th>قيمة الأصل</th><td>${escapeHtml(savedData.asset_value ? Number(savedData.asset_value).toLocaleString("ar-SA") + " ر.س" : "-")}</td></tr>
+        <tr><th>اسم المستلم</th><td>${escapeHtml(empName)}</td></tr>
+        <tr><th>القسم</th><td>${escapeHtml(deptName)}</td></tr>
+        <tr><th>موقع الأصل</th><td>${escapeHtml(locName)}</td></tr>
+        <tr><th>حالة الأصل</th><td>${escapeHtml(savedData.condition)}</td></tr>
+        <tr><th>ملاحظات</th><td>${escapeHtml(savedData.notes || "-")}</td></tr>
       </table>
       ${assetImgHtml}
       ${invoiceImgHtml}
@@ -495,7 +508,7 @@ export default function Assets() {
           <td>الإدارة العليا<div class="line"></div></td>
         </tr></table>
       </div>
-      <div class="footer">المستند رقم: ${documentCode} | تاريخ: ${saveDate}</div>
+      <div class="footer">المستند رقم: ${escapeHtml(documentCode)} | تاريخ: ${escapeHtml(saveDate)}</div>
     </body></html>`;
     printWindow.document.write(html);
     printWindow.document.close();
@@ -527,7 +540,7 @@ export default function Assets() {
   return (
     <DashboardLayout
       title="إدارة الأصول"
-      subtitle={`${assets.length} أصل`}
+      subtitle={`${tableTotal} أصل`}
       actions={
         <div className="flex items-center gap-2 w-full flex-wrap">
           <div className="flex items-center gap-2 flex-1">
@@ -540,7 +553,9 @@ export default function Assets() {
                 <SelectItem value="all">جميع الحالات</SelectItem>
                 <SelectItem value="ACTIVE">نشط</SelectItem>
                 <SelectItem value="EXCLUDED_PARTIAL">مستبعد جزئياً</SelectItem>
-                <SelectItem value="EXCLUDED_FULL">مستبعد كلياً</SelectItem>
+                <SelectItem value="REPLACED">مستبدل بالضمان</SelectItem><SelectItem value="EXCLUDED">مستبعد كلياً</SelectItem>
+                <SelectItem value="DRAFT">مسودة بانتظار الاعتماد</SelectItem>
+                <SelectItem value="CANCELLED">مسودة ملغاة</SelectItem>
               </SelectContent>
             </Select>
             <Select value={filterDept} onValueChange={setFilterDept}>
@@ -577,6 +592,8 @@ export default function Assets() {
       }
     >
       <DataTable
+        pageSize={50}
+        serverPagination={{page: tablePage, total: tableTotal, onPageChange: setTablePage, search: tableSearch, onSearchChange: (value) => {setTableSearch(value); setTablePage(1);}}}
         data={assets}
         columns={columns}
         searchKeys={["assetName", "assetCode", "employeeName", "departmentName", "locationName", "condition", "status", "assetValue", "notes"]}
@@ -587,16 +604,16 @@ export default function Assets() {
             <button onClick={(e) => { e.stopPropagation(); setShowView(a); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors" title="عرض">
               <Eye className="w-3.5 h-3.5 text-muted-foreground" />
             </button>
-            <button onClick={(e) => { e.stopPropagation(); startEdit(a); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors" title="تعديل">
+            {canOperate && a.status === "DRAFT" && (<button onClick={(e) => { e.stopPropagation(); startEdit(a); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors" title="تعديل">
               <Edit className="w-3.5 h-3.5 text-muted-foreground" />
-            </button>
-            <button onClick={(e) => { e.stopPropagation(); prevArchivePrintId.current = null; setArchivePrintId(a.id); }} className="w-7 h-7 rounded-md hover:bg-teal-50 flex items-center justify-center transition-colors" title="طباعة من الأرشيف">
+            </button>)}
+            {a.status !== "DRAFT" && a.status !== "CANCELLED" && (<button onClick={(e) => { e.stopPropagation(); prevArchivePrintId.current = null; setArchivePrintId(a.id); }} className="w-7 h-7 rounded-md hover:bg-teal-50 flex items-center justify-center transition-colors" title="طباعة من الأرشيف">
               <Printer className="w-3.5 h-3.5 text-teal-600" />
-            </button>
+            </button>)}
             <button onClick={(e) => { e.stopPropagation(); setLocation(`/tracking?type=asset&id=${a.id}&name=${encodeURIComponent(a.assetName)}&code=${encodeURIComponent(a.assetCode || '')}`); }} className="w-7 h-7 rounded-md hover:bg-violet-50 flex items-center justify-center transition-colors" title="عرض التتبع">
               <Activity className="w-3.5 h-3.5 text-violet-500" />
             </button>
-            {canDelete && (<button onClick={(e) => { e.stopPropagation(); handleDelete(a); }} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors" title="حذف">
+            {canOperate && a.status === "DRAFT" && (<button onClick={(e) => { e.stopPropagation(); handleCancelDraft(a); }} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors" title="إلغاء المسودة">
               <Trash2 className="w-3.5 h-3.5 text-red-400" />
             </button>
             )}
@@ -606,7 +623,7 @@ export default function Assets() {
 
       {/* View Dialog - مع عرض الصور */}
       <Dialog open={!!showView} onOpenChange={() => setShowView(null)}>
-        <DialogContent className="max-w-lg" dir="rtl">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
               <Eye className="w-5 h-5 text-primary" />
@@ -619,7 +636,7 @@ export default function Assets() {
                 <div className="grid grid-cols-2 gap-4">
                   <InfoField label="رمز الأصل" value={showView.assetCode || "-"} highlight />
                   <InfoField label="اسم الأصل" value={showView.assetName} />
-                  <InfoField label="الكمية" value={String(showView.quantity)} />
+                  <InfoField label="الكمية الأصلية" value={String(showView.quantity)} /><InfoField label="المستبعد سابقاً" value={String(showView.excludedQuantity || 0)} /><InfoField label="المستبدل بالضمان" value={String(showView.warrantyReplacedQuantity || 0)} /><InfoField label="معرفات الوحدات" value={Array.isArray(showView.serialNumbers) ? showView.serialNumbers.join("، ") : "—"} /><InfoField label="نهاية الضمان" value={showView.warrantyEndDate || "—"} /><InfoField label="المتبقي الفعلي" value={String(Math.max(0, remainingQuantity(showView)))} />
                   <InfoField label="قيمة الأصل" value={`${Number(showView.assetValue || 0).toLocaleString("ar-SA")} ر.س`} />
                   <InfoField label="اسم المستلم" value={showView.employeeName || "-"} />
                   <InfoField label="القسم" value={showView.departmentName || "-"} />
@@ -633,6 +650,13 @@ export default function Assets() {
                   <StatusBadge status={showView.status} />
                 </div>
               </div>
+              {showView.status === "DRAFT" && <div className="bg-amber-50 rounded-lg p-3 space-y-2 text-sm">
+                <p>هذه مسودة؛ لا تدخل في النقل أو الاستبعاد أو الجرد حتى الاعتماد.</p>
+                {showView.reviewNote && <p>ملاحظات المختص: {showView.reviewNote}</p>}
+                {canApprove && <div className="flex gap-2"><Button onClick={() => handleApprove(showView)} disabled={approveDraft.isPending}>اعتماد وقفل البيانات</Button><Button variant="outline" onClick={() => handleRequestChanges(showView)} disabled={requestChanges.isPending}>طلب تصحيح</Button></div>}
+              </div>}
+              {showView.approvedAt && <p className="text-xs text-muted-foreground">اعتمده {showView.approvalSnapshot?.approvedByName || showView.approvedBy} بتاريخ {new Date(showView.approvedAt).toLocaleString("ar-SA")}</p>}
+              {showView.status !== "DRAFT" && showView.status !== "CANCELLED" && <p className="text-xs text-muted-foreground">البيانات مقفلة. تغيير المستلم والقسم والموقع يتم عبر النقل.</p>}
               {showView.notes && (
                 <div>
                   <span className="text-[11px] font-bold text-muted-foreground block mb-1">ملاحظات</span>
@@ -691,80 +715,125 @@ export default function Assets() {
 
       {/* Add/Edit Dialog */}
       <Dialog open={showAdd} onOpenChange={(open) => { if (!open) resetForm(); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
-          <DialogHeader>
+        <DialogContent
+          className="max-w-3xl max-h-[92vh] overflow-hidden p-0 gap-0 grid-rows-[auto_minmax(0,1fr)_auto]"
+          dir="rtl"
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
+          <DialogHeader className="border-b border-border px-6 py-5 pr-12 text-right">
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
               {editingAsset ? <Edit className="w-5 h-5 text-primary" /> : <Plus className="w-5 h-5 text-primary" />}
               {editingAsset ? "تعديل أصل" : "إضافة أصل جديد"}
             </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              تُحفظ البيانات كمسودة قابلة للتعديل. يُولد الرقم الرسمي وتُقفل البيانات عند اعتماد المختص.
+            </p>
           </DialogHeader>
 
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-4">
-              <FormField label="اسم الأصل" required value={form.asset_name} onChange={(v) => setForm((f) => ({ ...f, asset_name: v }))} placeholder="أدخل اسم الأصل" />
-              <FormField label="رمز الأصل" required value={form.asset_code} onChange={(v) => setForm((f) => ({ ...f, asset_code: v }))} placeholder="AST-XXX" />
-              <FormField label="الكمية" value={form.quantity} onChange={(v) => setForm((f) => ({ ...f, quantity: v }))} type="number" placeholder="1" />
-              <FormField label="قيمة الأصل" value={form.asset_value} onChange={(v) => setForm((f) => ({ ...f, asset_value: v }))} type="number" placeholder="0.00" />
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">موقع الأصل <span className="text-red-500">*</span></label>
-                <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, branch: "", department: "", assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع أولاً" /></SelectTrigger>
-                  <SelectContent>
-                    {locations_.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+          <div className="min-h-0 overflow-y-auto px-6 py-5 space-y-5">
+            {/* البيانات الأساسية */}
+            <section className="rounded-xl border border-border bg-muted/10 p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">البيانات الأساسية</h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5">بيانات تعريف الأصل وقيمته.</p>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">الفرع <span className="text-red-500">*</span></label>
-                <Select value={form.branch} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, branch: v, department: "", assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر الفرع" : "اختر الموقع أولاً"} /></SelectTrigger>
-                  <SelectContent>{formBranches.map((b: any) => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}</SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                <div className="space-y-2"><label className="text-xs font-bold">التصنيف المالي</label><select className="w-full border rounded-lg h-10 px-3 bg-background" value={form.classification_id} onChange={e => setForm(f => ({ ...f, classification_id: e.target.value }))}><option value="">غير مصنف — يحتاج تهيئة قبل الإهلاك</option>{financialClasses.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}</select></div>
+                <FormField label="اسم الأصل" required value={form.asset_name} onChange={(v) => setForm((f) => ({ ...f, asset_name: v }))} placeholder="أدخل اسم الأصل" />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">رمز الأصل</label>
+                  <div className="min-h-10 px-3 py-2 rounded-lg bg-background border border-dashed border-border text-sm flex items-center font-mono text-muted-foreground leading-5">
+                    {form.asset_code
+                      ? form.asset_code
+                      : (() => {
+                          const loc: any = locations_.find((l: any) => String(l.id) === form.location);
+                          return getMonthlyCodePreview(loc?.assetPrefix, loc?.assetSequence, loc?.assetSequencePeriod)
+                            || "يُولد تلقائياً بعد اختيار الموقع";
+                        })()}
+                  </div>
+                  <p className="text-[10px] leading-4 text-muted-foreground">
+                    الرقم المعروض تقديري، ويُولد نهائياً عند اعتماد المسودة. ولا يتغير عند نقل الأصل لاحقاً.
+                  </p>
+                </div>
+                <FormField label="الكمية" value={form.quantity} onChange={(v) => setForm((f) => ({ ...f, quantity: v }))} type="number" placeholder="1" />
+                <FormField label="قيمة الأصل" value={form.asset_value} onChange={(v) => setForm((f) => ({ ...f, asset_value: v }))} type="number" placeholder="0.00" />
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">القسم <span className="text-red-500">*</span></label>
-                <Select value={form.department} disabled={!form.branch} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.branch ? "اختر القسم" : "اختر الفرع أولاً"} /></SelectTrigger>
-                  <SelectContent>
-                    {formDepartments.map((d) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">اسم المستلم <span className="text-red-500">*</span></label>
-                <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف المستلم" /></SelectTrigger>
-                  <SelectContent>
-                    {formEmployees.map((e) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">حالة الأصل</label>
-                <Select value={form.condition} onValueChange={(v) => setForm((f) => ({ ...f, condition: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الحالة" /></SelectTrigger>
-                  <SelectContent>
-                    {ASSET_CONDITIONS.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            </section>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">ملاحظات</label>
-              <textarea
-                value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                placeholder="أدخل أي ملاحظات..."
-                rows={3}
-                className="w-full px-3 py-2 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all resize-none"
-              />
-            </div>
+            {/* الموقع والتخصيص */}
+            <section className="rounded-xl border border-border bg-muted/10 p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">الموقع والتخصيص</h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5">اختر الموقع ثم الفرع والقسم والمستلم.</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">موقع الأصل <span className="text-red-500">*</span></label>
+                  <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, branch: "", department: "", assigned_to: "" }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع أولاً" /></SelectTrigger>
+                    <SelectContent>
+                      {locations_.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.code ? `${l.code} — ` : ""}{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">الفرع <span className="text-red-500">*</span></label>
+                  <Select value={form.branch} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, branch: v, department: "", assigned_to: "" }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر الفرع" : "اختر الموقع أولاً"} /></SelectTrigger>
+                    <SelectContent>{formBranches.map((b: any) => <SelectItem key={b.id} value={String(b.id)}>{b.code ? `${b.code} — ` : ""}{b.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">القسم <span className="text-red-500">*</span></label>
+                  <Select value={form.department} disabled={!form.branch} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.branch ? "اختر القسم" : "اختر الفرع أولاً"} /></SelectTrigger>
+                    <SelectContent>
+                      {formDepartments.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.code ? `${d.code} — ` : ""}{d.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">اسم المستلم <span className="text-red-500">*</span></label>
+                  <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف المستلم" /></SelectTrigger>
+                    <SelectContent>
+                      {formEmployees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.code ? `${e.code} — ` : ""}{e.fullName}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </section>
+
+            {/* الحالة والملاحظات */}
+            <section className="rounded-xl border border-border bg-muted/10 p-4">
+              <div className="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] gap-4 items-start">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">حالة الأصل</label>
+                  <Select value={form.condition} onValueChange={(v) => setForm((f) => ({ ...f, condition: v }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الحالة" /></SelectTrigger>
+                    <SelectContent>
+                      {ASSET_CONDITIONS.map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">ملاحظات</label>
+                  <textarea
+                    value={form.notes}
+                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                    placeholder="أدخل أي ملاحظات..."
+                    rows={3}
+                    className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all resize-none"
+                  />
+                </div>
+              </div>
+            </section>
 
             {/* المرفقات */}
-            <div className="border border-border rounded-xl overflow-hidden">
+            <section className="border border-border rounded-xl overflow-hidden">
               <div className="bg-muted/50 px-4 py-2.5 border-b border-border">
                 <h3 className="text-sm font-bold flex items-center gap-2">
                   <Camera className="w-4 h-4 text-primary" />
@@ -772,31 +841,22 @@ export default function Assets() {
                   <span className="text-[10px] text-muted-foreground font-normal">(يتم التحويل تلقائياً إلى WebP)</span>
                 </h3>
               </div>
-              <div className="p-4 space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      {form.asset_image ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          {form.asset_image.name}
-                        </span>
-                      ) : assetImagePreview ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          صورة محفوظة مسبقاً
-                        </span>
-                      ) : "لم يتم إرفاق صورة الأصل"}
-                    </span>
+              <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-lg border border-border p-3 space-y-3 bg-background">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold">صورة الأصل</span>
                     {(form.asset_image || assetImagePreview) && (
-                      <button onClick={() => { setForm((f) => ({ ...f, asset_image: null })); setAssetImagePreview(null); setUploadedAssetImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
+                      <button type="button" aria-label="إزالة صورة الأصل" onClick={() => { setForm((f) => ({ ...f, asset_image: null })); setAssetImagePreview(null); setUploadedAssetImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
                         <X className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
+                  <span className="text-[11px] text-muted-foreground block min-h-4">
+                    {form.asset_image ? form.asset_image.name : assetImagePreview ? "صورة محفوظة مسبقاً" : "لم يتم إرفاق صورة"}
+                  </span>
                   {assetImagePreview && (
-                    <div className="rounded-lg overflow-hidden border border-border max-w-[200px]">
-                      <img src={assetImagePreview} alt="صورة الأصل" className="w-full h-auto" />
+                    <div className="rounded-lg overflow-hidden border border-border h-28">
+                      <img src={assetImagePreview} alt="صورة الأصل" className="w-full h-full object-cover" />
                     </div>
                   )}
                   <Button type="button" variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => handleImageSelect("asset")}>
@@ -805,30 +865,22 @@ export default function Assets() {
                   </Button>
                   <input ref={assetImageRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" className="hidden" onChange={(e) => handleImageChange(e, "asset")} />
                 </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      {form.invoice_image ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          {form.invoice_image.name}
-                        </span>
-                      ) : invoiceImagePreview ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          صورة فاتورة محفوظة مسبقاً
-                        </span>
-                      ) : "لم يتم إرفاق صورة الفاتورة"}
-                    </span>
+
+                <div className="rounded-lg border border-border p-3 space-y-3 bg-background">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold">صورة الفاتورة</span>
                     {(form.invoice_image || invoiceImagePreview) && (
-                      <button onClick={() => { setForm((f) => ({ ...f, invoice_image: null })); setInvoiceImagePreview(null); setUploadedInvoiceImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
+                      <button type="button" aria-label="إزالة صورة الفاتورة" onClick={() => { setForm((f) => ({ ...f, invoice_image: null })); setInvoiceImagePreview(null); setUploadedInvoiceImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
                         <X className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
+                  <span className="text-[11px] text-muted-foreground block min-h-4">
+                    {form.invoice_image ? form.invoice_image.name : invoiceImagePreview ? "صورة محفوظة مسبقاً" : "لم يتم إرفاق صورة"}
+                  </span>
                   {invoiceImagePreview && (
-                    <div className="rounded-lg overflow-hidden border border-border max-w-[200px]">
-                      <img src={invoiceImagePreview} alt="صورة الفاتورة" className="w-full h-auto" />
+                    <div className="rounded-lg overflow-hidden border border-border h-28">
+                      <img src={invoiceImagePreview} alt="صورة الفاتورة" className="w-full h-full object-cover" />
                     </div>
                   )}
                   <Button type="button" variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => handleImageSelect("invoice")}>
@@ -838,36 +890,25 @@ export default function Assets() {
                   <input ref={invoiceImageRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" className="hidden" onChange={(e) => handleImageChange(e, "invoice")} />
                 </div>
               </div>
-            </div>
+            </section>
+          </div>
 
-            {/* أزرار الإجراءات */}
-            <div className="flex flex-col gap-2 pt-2">
-              {editingAsset ? (
-                <Button className="w-full gap-2" onClick={handleUpdate} disabled={updateAsset.isPending || isUploading}>
-                  {(updateAsset.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                  {isUploading ? "جاري رفع الصور..." : "تحديث الأصل"}
-                </Button>
-              ) : (
-                <>
-                  <Button className="w-full gap-2" onClick={handleSave} disabled={!!savedData || createAsset.isPending || isUploading}>
-                    {(createAsset.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                    {isUploading ? "جاري رفع الصور..." : "حفظ الأصل"}
-                  </Button>
-                  <Button variant="outline" className="w-full gap-2" onClick={handlePrint} disabled={!savedData}>
-                    <Printer className="w-4 h-4" />
-                    معاينة قبل الطباعة
-                  </Button>
-                  {savedData && (
-                    <p className="text-xs text-center text-green-600 bg-green-50 rounded-lg p-2">
-                      تم الحفظ بنجاح | الرقم الورقي: {documentCode}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
+          <div className="border-t border-border bg-background px-6 py-4">
+            {editingAsset ? (
+              <Button className="w-full gap-2" onClick={handleUpdate} disabled={updateAsset.isPending || isUploading}>
+                {(updateAsset.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                {isUploading ? "جاري رفع الصور..." : "حفظ التعديلات"}
+              </Button>
+            ) : (
+              <Button className="w-full gap-2" onClick={handleSave} disabled={createAsset.isPending || isUploading}>
+                {(createAsset.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                {isUploading ? "جاري رفع الصور..." : "حفظ كمسودة"}
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>
+      <InventoryApprovalDialog open={!!approvalCandidate} name={approvalCandidate?.assetName || ""} pending={approveDraft.isPending} onCancel={() => setApprovalCandidate(null)} onConfirm={confirmApproval} />
     </DashboardLayout>
   );
 }

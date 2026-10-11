@@ -1,3 +1,4 @@
+import { escapeHtml } from "@shared/html";
 /**
  * clearanceReport.ts - توليد تقرير براءة الذمة HTML
  * ====================================================
@@ -71,11 +72,11 @@ export function generateClearanceReport(data: ClearanceReportData): string {
         <div class="dept-header">
           <div class="dept-title">
             <span class="dept-icon">◆</span>
-            ${dept}
+            ${escapeHtml(dept)}
           </div>
           <div class="dept-alternate">
             <span class="alt-label">المستلم البديل:</span>
-            <span class="alt-name">${alternate}</span>
+            <span class="alt-name">${escapeHtml(alternate)}</span>
           </div>
         </div>
         <div class="dept-body">`;
@@ -98,10 +99,10 @@ export function generateClearanceReport(data: ClearanceReportData): string {
       deptAssets.forEach((item, idx) => {
         departmentSectionsHTML += `
                 <tr>
-                  <td class="col-num">${idx + 1}</td>
-                  <td class="col-name">${item.name}</td>
-                  <td class="col-code">${item.code}</td>
-                  <td class="col-qty">${item.quantity}</td>
+                  <td class="col-num">${escapeHtml(idx + 1)}</td>
+                  <td class="col-name">${escapeHtml(item.name)}</td>
+                  <td class="col-code">${escapeHtml(item.code)}</td>
+                  <td class="col-qty">${escapeHtml(item.quantity)}</td>
                 </tr>`;
       });
       departmentSectionsHTML += `
@@ -128,10 +129,10 @@ export function generateClearanceReport(data: ClearanceReportData): string {
       deptCustody.forEach((item, idx) => {
         departmentSectionsHTML += `
                 <tr>
-                  <td class="col-num">${idx + 1}</td>
-                  <td class="col-name">${item.name}</td>
-                  <td class="col-code">${item.code}</td>
-                  <td class="col-qty">${item.quantity}</td>
+                  <td class="col-num">${escapeHtml(idx + 1)}</td>
+                  <td class="col-name">${escapeHtml(item.name)}</td>
+                  <td class="col-code">${escapeHtml(item.code)}</td>
+                  <td class="col-qty">${escapeHtml(item.quantity)}</td>
                 </tr>`;
       });
       departmentSectionsHTML += `
@@ -147,12 +148,12 @@ export function generateClearanceReport(data: ClearanceReportData): string {
 
   // بناء بنود التوقيعات
   const signaturesHTML = data.signatures
-    .map(sig => `<td class="sig-cell"><div class="sig-title">${sig}</div><div class="sig-line"></div></td>`)
+    .map(sig => `<td class="sig-cell"><div class="sig-title">${escapeHtml(sig)}</div><div class="sig-line"></div></td>`)
     .join("");
 
   // بناء بنود البراءة
   const statementsHTML = processedStatements
-    .map((stmt, i) => `<li${i === 0 ? ' class="first-statement"' : ''}>${stmt}</li>`)
+    .map((stmt, i) => `<li${i === 0 ? ' class="first-statement"' : ''}>${escapeHtml(stmt)}</li>`)
     .join("");
 
   return `<!DOCTYPE html>
@@ -160,7 +161,7 @@ export function generateClearanceReport(data: ClearanceReportData): string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>براءة ذمة - ${data.employeeName} - ${data.clearanceCode}</title>
+    <title>براءة ذمة - ${escapeHtml(data.employeeName)} - ${escapeHtml(data.clearanceCode)}</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&display=swap');
 
@@ -695,22 +696,22 @@ export function generateClearanceReport(data: ClearanceReportData): string {
         <div class="page-content">
             <div class="header">
                 <h1>نموذج براءة ذمة</h1>
-                <div class="date">التاريخ: ${today}</div>
-                <div class="code">${data.clearanceCode}</div>
+                <div class="date">التاريخ: ${escapeHtml(today)}</div>
+                <div class="code">${escapeHtml(data.clearanceCode)}</div>
             </div>
 
             <div class="employee-info">
                 <table>
                     <tr class="info-row-3">
-                        <td><strong>اسم الموظف:</strong> ${data.employeeName}</td>
-                        <td><strong>رقم الهوية:</strong> ${data.idNumber}</td>
-                        <td><strong>البصمة:</strong> ${data.fingerprintId}</td>
+                        <td><strong>اسم الموظف:</strong> ${escapeHtml(data.employeeName)}</td>
+                        <td><strong>رقم الهوية:</strong> ${escapeHtml(data.idNumber)}</td>
+                        <td><strong>البصمة:</strong> ${escapeHtml(data.fingerprintId)}</td>
                     </tr>
                     <tr>
-                        <td colspan="3"><strong>سبب المغادرة:</strong> ${data.reason}</td>
+                        <td colspan="3"><strong>سبب المغادرة:</strong> ${escapeHtml(data.reason)}</td>
                     </tr>
                     <tr>
-                        <td colspan="3"><strong>آخر يوم دوام:</strong> ${data.dayName} الموافق ${formattedDate}</td>
+                        <td colspan="3"><strong>آخر يوم دوام:</strong> ${escapeHtml(data.dayName)} الموافق ${escapeHtml(formattedDate)}</td>
                     </tr>
                 </table>
             </div>
@@ -762,22 +763,22 @@ export function generateClearanceReport(data: ClearanceReportData): string {
         <div class="page-content">
             <div class="header">
                 <h1>إقرار عهد</h1>
-                <div class="date">التاريخ: ${today}</div>
-                <div class="code">${data.clearanceCode}</div>
+                <div class="date">التاريخ: ${escapeHtml(today)}</div>
+                <div class="code">${escapeHtml(data.clearanceCode)}</div>
             </div>
 
             <div class="employee-info">
                 <table>
                     <tr class="info-row-3">
-                        <td><strong>اسم الموظف:</strong> ${data.employeeName}</td>
-                        <td><strong>رقم الهوية:</strong> ${data.idNumber}</td>
-                        <td><strong>البصمة:</strong> ${data.fingerprintId}</td>
+                        <td><strong>اسم الموظف:</strong> ${escapeHtml(data.employeeName)}</td>
+                        <td><strong>رقم الهوية:</strong> ${escapeHtml(data.idNumber)}</td>
+                        <td><strong>البصمة:</strong> ${escapeHtml(data.fingerprintId)}</td>
                     </tr>
                     <tr>
-                        <td colspan="3"><strong>سبب المغادرة:</strong> ${data.reason}</td>
+                        <td colspan="3"><strong>سبب المغادرة:</strong> ${escapeHtml(data.reason)}</td>
                     </tr>
                     <tr>
-                        <td colspan="3"><strong>آخر يوم دوام:</strong> ${data.dayName} الموافق ${formattedDate}</td>
+                        <td colspan="3"><strong>آخر يوم دوام:</strong> ${escapeHtml(data.dayName)} الموافق ${escapeHtml(formattedDate)}</td>
                     </tr>
                 </table>
             </div>
@@ -785,17 +786,17 @@ export function generateClearanceReport(data: ClearanceReportData): string {
             <div class="summary-box">
                 <div class="summary-item">
                     <span class="label">إجمالي الأصول</span>
-                    <span class="value">${totalAssets}</span>
+                    <span class="value">${escapeHtml(totalAssets)}</span>
                 </div>
                 <div class="summary-item divider"></div>
                 <div class="summary-item">
                     <span class="label">إجمالي العهد</span>
-                    <span class="value">${totalCustody}</span>
+                    <span class="value">${escapeHtml(totalCustody)}</span>
                 </div>
                 <div class="summary-item divider"></div>
                 <div class="summary-item">
                     <span class="label">المجموع الكلي</span>
-                    <span class="value" style="color: var(--gold);">${totalAll}</span>
+                    <span class="value" style="color: var(--gold);">${escapeHtml(totalAll)}</span>
                 </div>
             </div>
 
@@ -804,7 +805,7 @@ export function generateClearanceReport(data: ClearanceReportData): string {
             ${departmentSectionsHTML || '<div style="text-align:center; padding: 30px; color: var(--text-light); font-size: 13px;">لا توجد أصول أو عهد مسجلة باسم هذا الموظف</div>'}
 
             <div class="footer-note">
-                <p><span class="icon">📋</span> ملاحظة: ${footerNote}</p>
+                <p><span class="icon">📋</span> ملاحظة: ${escapeHtml(footerNote)}</p>
             </div>
         </div>
     </div>

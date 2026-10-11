@@ -1,3 +1,4 @@
+import { escapeHtml } from "@shared/html";
 import { useState, useMemo } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { AuditLogExcelButton } from "@/components/ExcelButtons";
@@ -22,6 +23,18 @@ import {
 } from "lucide-react";
 
 const actionTypeLabels: Record<string, { label: string; color: string; bgColor: string; icon: string }> = {
+  WARRANTY: {label:"استبدال بالضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  WARRANTY_REQUEST: {label:"طلب ضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  WARRANTY_EDIT: {label:"تعديل مسودة الضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  WARRANTY_SUBMIT: {label:"تقديم طلب الضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  WARRANTY_REVIEW: {label:"مراجعة طلب الضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  WARRANTY_CANCEL: {label:"إلغاء طلب الضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  INVENTORY: { label: "جرد", color: "text-cyan-700", bgColor: "bg-cyan-100", icon: "✓" },
+  INVENTORY_REVIEW: { label: "متابعة فرق الجرد", color: "text-cyan-700", bgColor: "bg-cyan-100", icon: "✓" },
+  ATTACH: { label: "إضافة مرفق", color: "text-violet-700", bgColor: "bg-violet-100", icon: "+" },
+  APPROVE: { label: "اعتماد وقفل", color: "text-emerald-700", bgColor: "bg-emerald-100", icon: "✓" },
+  REVIEW: { label: "طلب تصحيح", color: "text-amber-700", bgColor: "bg-amber-100", icon: "✎" },
+  CANCEL: { label: "إلغاء مسودة", color: "text-gray-700", bgColor: "bg-gray-100", icon: "✕" },
   CREATE: { label: "إضافة", color: "text-emerald-700", bgColor: "bg-emerald-100", icon: "+" },
   UPDATE: { label: "تعديل", color: "text-blue-700", bgColor: "bg-blue-100", icon: "✎" },
   DELETE: { label: "حذف", color: "text-red-700", bgColor: "bg-red-100", icon: "✕" },
@@ -35,6 +48,7 @@ const tableNameLabels: Record<string, string> = {
   locations: "المواقع",
   employees: "الموظفين",
   exclusion_types: "أنواع الاستبعاد",
+  warranty_replacements: "استبدال الضمان",
   assets: "الأصول",
   custody_items: "العهد",
   asset_transfers: "النقل",
@@ -42,10 +56,17 @@ const tableNameLabels: Record<string, string> = {
   custody_exclusions: "استبعاد العهد",
   clearance_records: "براءة الذمة",
   archive_documents: "الأرشيف",
+  inventory_differences: "فروقات الجرد",
 };
 
 // ترجمة أسماء الحقول للعربية
 const fieldNameLabels: Record<string, string> = {
+  draftVersion: "نسخة المسودة",
+  approvedBy: "معرف المعتمد",
+  approvedByName: "اسم المعتمد",
+  approvedAt: "وقت الاعتماد",
+  approvalSnapshot: "البيانات عند الاعتماد",
+  reviewNote: "ملاحظات المراجعة",
   assetName: "اسم الأصل",
   assetCode: "رمز الأصل",
   name: "الاسم",
@@ -232,8 +253,8 @@ export default function AuditLog() {
       </head>
       <body>
         <h1>سجل التدقيق</h1>
-        <p class="subtitle">تاريخ الطباعة: ${new Date().toLocaleString("ar-SA")} | عدد السجلات: ${rows.length}</p>
-        ${activeFilters.length > 0 ? `<p class="subtitle">الفلاتر: ${activeFilters.join(" | ")}</p>` : ""}
+        <p class="subtitle">تاريخ الطباعة: ${escapeHtml(new Date().toLocaleString("ar-SA"))} | عدد السجلات: ${escapeHtml(rows.length)}</p>
+        ${activeFilters.length > 0 ? `<p class="subtitle">الفلاتر: ${escapeHtml(activeFilters.join(" | "))}</p>` : ""}
         <table>
           <thead>
             <tr>
@@ -250,13 +271,13 @@ export default function AuditLog() {
             ${rows.map((row: any, i: number) => {
               const actionClass = row.actionType?.toLowerCase() || "create";
               return `<tr>
-                <td>${i + 1}</td>
-                <td>${new Date(row.createdAt).toLocaleString("ar-SA")}</td>
-                <td><span class="badge badge-${actionClass}">${actionTypeLabels[row.actionType]?.label || row.actionType}</span></td>
-                <td>${tableNameLabels[row.tableName] || row.tableName}</td>
-                <td>${row.actionDescription || ""}</td>
-                <td>${row.performedByName || "النظام"}</td>
-                <td style="font-family: monospace; font-size: 10px;">${row.ipAddress || "—"}</td>
+                <td>${escapeHtml(i + 1)}</td>
+                <td>${escapeHtml(new Date(row.createdAt).toLocaleString("ar-SA"))}</td>
+                <td><span class="badge badge-${escapeHtml(actionClass)}">${escapeHtml(actionTypeLabels[row.actionType]?.label || row.actionType)}</span></td>
+                <td>${escapeHtml(tableNameLabels[row.tableName] || row.tableName)}</td>
+                <td>${escapeHtml(row.actionDescription || "")}</td>
+                <td>${escapeHtml(row.performedByName || "النظام")}</td>
+                <td style="font-family: monospace; font-size: 10px;">${escapeHtml(row.ipAddress || "—")}</td>
               </tr>`;
             }).join("")}
           </tbody>

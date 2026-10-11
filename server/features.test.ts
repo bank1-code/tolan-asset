@@ -1,4 +1,11 @@
-import { describe, expect, it, vi, beforeAll } from "vitest";
+
+import {legacyFixture} from './test-utils/legacyFixture';
+const isolated=vi.hoisted(()=>({db:null}));
+vi.mock('./db',()=>({getDb:async()=>isolated.db}));
+vi.mock('./security',()=>({logAuditAction:vi.fn(),clearBruteForceBlock:vi.fn()}));
+vi.mock('./storage',()=>({storagePut:vi.fn(async()=>({url:'/api/files/test/backup.tln'}))}));
+beforeEach(()=>{isolated.db=legacyFixture();});
+import { describe, expect, it, vi, beforeAll, beforeEach } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import type { User } from "../drizzle/schema";
@@ -104,32 +111,32 @@ describe("localAuth", () => {
     const uniqueName = `test_${Date.now()}`;
     await caller.localAuth.createUser({
       username: uniqueName,
-      password: "test1234",
+      password: "QA-Test-2026!",
       name: "مستخدم اختبار",
-      role: "user",
+      role: "accountant",
     });
 
     // Try to create duplicate
     await expect(
       caller.localAuth.createUser({
         username: uniqueName,
-        password: "test1234",
+        password: "QA-Test-2026!",
         name: "مستخدم اختبار 2",
-        role: "user",
+        role: "accountant",
       })
     ).rejects.toThrow("اسم المستخدم موجود مسبقاً");
   });
 
   it("createUser requires admin role", async () => {
-    const ctx = createMockContext({ role: "user" });
+    const ctx = createMockContext({ role: "accountant" });
     const caller = appRouter.createCaller(ctx);
 
     await expect(
       caller.localAuth.createUser({
         username: "newuser",
-        password: "test1234",
+        password: "QA-Test-2026!",
         name: "مستخدم جديد",
-        role: "user",
+        role: "accountant",
       })
     ).rejects.toThrow();
   });
@@ -236,7 +243,7 @@ describe("excel", () => {
 // ==========================================
 describe("backup", () => {
   it("create returns backup info", async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({role:"owner"});
     const caller = appRouter.createCaller(ctx);
 
     const result = await caller.backup.create();
@@ -248,7 +255,7 @@ describe("backup", () => {
   });
 
   it("list returns array of backups", async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({role:"owner"});
     const caller = appRouter.createCaller(ctx);
 
     const backups = await caller.backup.list();
@@ -258,7 +265,7 @@ describe("backup", () => {
   });
 
   it("restore rejects invalid data", async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({role:"owner"});
     const caller = appRouter.createCaller(ctx);
 
     // Invalid base64 should fail

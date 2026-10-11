@@ -57,6 +57,90 @@
       "when": 1790775607864,
       "tag": "0007_location_branch_department",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1791191134332,
+      "tag": "0008_hierarchical_numbering",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1791197837907,
+      "tag": "0009_monthly_asset_custody_numbering",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1791203246287,
+      "tag": "0010_melted_legion",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1791208883354,
+      "tag": "0011_curved_scrambler",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1791270356632,
+      "tag": "0012_equal_ma_gnuci",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1791270949036,
+      "tag": "0013_inventory_session_mapping",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1791272224525,
+      "tag": "0014_warranty_replacements",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1791273388368,
+      "tag": "0015_accounting_manager_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1791276528868,
+      "tag": "0016_inventory_count_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1791276775382,
+      "tag": "0017_inventory_difference_followup",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1791278421390,
+      "tag": "0018_inventory_count_usability",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1791288843443,
+      "tag": "0019_dark_stingray",
+      "breakpoints": true
     }
   ]
 }

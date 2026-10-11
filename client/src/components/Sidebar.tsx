@@ -59,6 +59,8 @@ const menuGroups = [
     items: [
       { path: "/transfers", icon: ArrowLeftRight, label: "النقل" },
       { path: "/exclusions", icon: XCircle, label: "الاستبعادات" },
+      { path: "/warranty", icon: ShieldCheck, label: "استبدال الضمان" },
+      { path: "/depreciation", icon: BarChart3, label: "وحدة الإهلاك" },
       { path: "/clearance", icon: ClipboardCheck, label: "براءة الذمة" },
     ],
   },
@@ -97,7 +99,7 @@ export default function Sidebar({ collapsed, onToggle, onClose }: SidebarProps) 
             item.path === "/settings" &&
             user?.role !== "owner" &&
             user?.role !== "admin" &&
-            user?.role !== "accountant"
+            user?.role !== "accountant" && user?.role !== "accounting_manager"
           ) return false;
           return true;
         }),
@@ -315,7 +317,7 @@ export default function Sidebar({ collapsed, onToggle, onClose }: SidebarProps) 
                 {user?.name || "المستخدم"}
               </p>
               <p className="text-[10px] text-muted-foreground truncate">
-                {({ owner: "المالك", admin: "مدير النظام", accountant: "المحاسب", employee: "الموظف" } as Record<string, string>)[user?.role || ""] || "مستخدم"}
+                {({ owner: "المالك", admin: "مدير النظام", accounting_manager: "مدير الحسابات", accountant: "المحاسب", employee: "الموظف" } as Record<string, string>)[user?.role || ""] || "مستخدم"}
               </p>
             </div>
           )}

@@ -9,7 +9,7 @@ import { useLocation } from "wouter";
 import {
   Search, Activity, ArrowLeftRight, PenLine, PlusCircle,
   XCircle, ChevronDown, ChevronUp, X, Box, HandCoins,
-  Clock, User, FileText, AlertCircle, Loader2
+  CheckCircle2, Clock, User, FileText, AlertCircle, Loader2
 } from "lucide-react";
 
 // ─── أنواع الأحداث وألوانها وأيقوناتها ──────────────────────────────────────
@@ -21,6 +21,18 @@ const EVENT_CONFIG: Record<string, {
   border: string;
   dot: string;
 }> = {
+  WARRANTY: {label:"استبدال بالضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  WARRANTY_REQUEST: {label:"طلب ضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  WARRANTY_EDIT: {label:"تعديل مسودة الضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  WARRANTY_SUBMIT: {label:"تقديم طلب الضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  WARRANTY_REVIEW: {label:"مراجعة طلب الضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  WARRANTY_CANCEL: {label:"إلغاء طلب الضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  APPROVE: {label:"اعتماد وقفل",icon:CheckCircle2,color:"text-emerald-700",bg:"bg-emerald-50",border:"border-emerald-200",dot:"bg-emerald-500"},
+  REVIEW: {label:"طلب تصحيح",icon:PenLine,color:"text-amber-700",bg:"bg-amber-50",border:"border-amber-200",dot:"bg-amber-500"},
+  CANCEL: {label:"إلغاء مسودة",icon:XCircle,color:"text-rose-700",bg:"bg-rose-50",border:"border-rose-200",dot:"bg-rose-500"},
+  INVENTORY: {label:"جرد",icon:Box,color:"text-cyan-700",bg:"bg-cyan-50",border:"border-cyan-200",dot:"bg-cyan-500"},
+  ATTACH: {label:"مرفق لاحق",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  DOCUMENT: {label:"وثيقة",icon:FileText,color:"text-blue-700",bg:"bg-blue-50",border:"border-blue-200",dot:"bg-blue-500"},
   CREATE: {
     label: "إضافة جديدة",
     icon: PlusCircle,
@@ -75,6 +87,9 @@ const getEventConfig = (actionType: string) =>
 
 // ─── ترجمة أسماء الحقول ──────────────────────────────────────────────────────
 const FIELD_LABELS: Record<string, string> = {
+  job: "الوظيفة", jobTitle: "الوظيفة", employeeName: "الموظف", branchId: "الفرع", branchName: "الفرع", locationName: "الموقع", departmentName: "القسم",
+  entityCode: "رمز السجل", entityName: "اسم السجل", entityType: "نوع السجل", exclusionCode: "رقم الاستبعاد", exclusionMode: "نطاق الاستبعاد", originalQuantity: "الكمية الأصلية", excludedQuantity: "إجمالي المستبعد", excludedBy: "منفذ الاستبعاد", exclusionDate: "وقت تسجيل الاستبعاد", oldEmployeeName: "الموظف وقت العملية", oldDepartmentName: "القسم وقت العملية", oldLocationName: "الموقع وقت العملية", warrantyReplacedQuantity: "المستبدل بالضمان", actualQuantity: "الكمية الفعلية", expectedQuantity: "الكمية المتوقعة", difference: "الفرق", unitIdentifiers: "معرفات الوحدات", createdByName: "أضافه", destination: "التخصيص الجديد", source: "التخصيص السابق",
+  quantityBefore:"المتبقي قبل العملية", quantityExcluded:"المستبعد في العملية", quantityRemaining:"المتبقي بعد العملية", previouslyExcluded:"المستبعد سابقاً", originalUnitValue:"قيمة الوحدة الأصلية", effectiveDate:"تاريخ السريان", responsibleData:"المسؤولون", exclusionImages:"المرفقات الأصلية", inventoryResult:"نتيجة الجرد", fileName:"اسم المرفق", approvedByName:"المعتمد", approvedAt:"وقت الاعتماد", reviewNote:"ملاحظات المراجعة", entitySnapshot:"بيانات السجل وقت الاستبعاد", transferSnapshot:"بيانات النقل التاريخية", item:"نتيجة العنصر في الجرد",
   assetName: "اسم الأصل",
   name: "الاسم",
   assetCode: "رمز الأصل",
@@ -94,6 +109,22 @@ const FIELD_LABELS: Record<string, string> = {
   exclusionReason: "سبب الاستبعاد",
 };
 
+function historyValue(value: unknown, depth = 0): string {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "نعم" : "لا";
+  if (Array.isArray(value)) return value.length ? value.map((item, i) => `${i + 1}. ${historyValue(item, depth + 1)}`).join("\n") : "لا توجد عناصر";
+  if (typeof value === "object") return Object.entries(value).map(([key, item]) => `${"  ".repeat(depth)}${FIELD_LABELS[key] || key}: ${historyValue(item, depth + 1)}`).join("\n") || "—";
+  return String(value);
+}
+
+function HistoryValue({ value }: { value: unknown }) {
+  const text = historyValue(value);
+  const content = <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{text}</span>;
+  return typeof value === "object" && value !== null && text.length > 600
+    ? <details><summary className="cursor-pointer text-primary">عرض البيانات المحفوظة</summary><div className="mt-2 max-h-64 overflow-y-auto">{content}</div></details>
+    : content;
+}
+
 // ─── مكوّن نافذة التفاصيل (قبل / بعد) ───────────────────────────────────────
 function EventDetailModal({ event, onClose }: { event: any; onClose: () => void }) {
   const cfg = getEventConfig(event.actionType);
@@ -101,7 +132,9 @@ function EventDetailModal({ event, onClose }: { event: any; onClose: () => void 
 
   const oldData = event.oldData || {};
   const newData = event.newData || {};
-  const changedFields: string[] = event.changedFields || Object.keys({ ...oldData, ...newData });
+  // Operational events often store a full source row before and a partial event
+  // after. Unmentioned source fields must not look like deleted values.
+  const changedFields: string[] = event.changedFields || Object.keys(Object.keys(newData).length ? newData : oldData);
 
   // الحقول المراد عرضها (تجاهل الحقول الداخلية)
   const skipFields = ["id", "createdAt", "updatedAt", "createdBy", "performedBy"];
@@ -125,6 +158,7 @@ function EventDetailModal({ event, onClose }: { event: any; onClose: () => void 
             </p>
           </div>
           <button
+            aria-label="إغلاق تفاصيل الحدث"
             onClick={onClose}
             className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-black/10 transition-colors"
           >
@@ -150,6 +184,14 @@ function EventDetailModal({ event, onClose }: { event: any; onClose: () => void 
           )}
         </div>
 
+        {event.historicalSnapshot === false && <p className="px-5 py-2 text-xs text-amber-700">بيانات هذا الحدث القديم غير مكتملة؛ لا تُستبدل ببيانات السجل الحالية.</p>}
+        {event.actionType === "TRANSFER" && newData.transferSnapshot && <section className="px-5 py-3 border-b text-xs space-y-2">
+          <h4 className="font-semibold">التخصيص المحفوظ وقت النقل</h4>
+          <p>الموظف: {newData.transferSnapshot.fromEmployeeName || "غير مسجل"} ← {newData.transferSnapshot.toEmployeeName || "غير مسجل"}</p>
+          <p>القسم: {newData.fromDepartment || "غير مسجل"} ← {newData.toDepartment || "غير مسجل"}</p>
+          <p>الموقع: {newData.fromLocation || "غير مسجل"} ← {newData.toLocation || "غير مسجل"}</p>
+        </section>}
+        <p className="px-5 py-2 text-xs text-muted-foreground">«غير وارد في اللقطة» تعني أن الحدث لم يسجل هذا الحقل؛ ولا تعني حذفه أو تغييره.</p>
         {/* جدول قبل / بعد */}
         <div className="flex-1 overflow-y-auto p-5">
           {displayFields.length === 0 ? (
@@ -159,7 +201,7 @@ function EventDetailModal({ event, onClose }: { event: any; onClose: () => void 
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border border-border">
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
                 <thead>
                   <tr className="bg-muted/40 border-b border-border">
                     <th className="text-right py-2.5 px-4 text-xs font-semibold text-muted-foreground w-1/3">الحقل</th>
@@ -171,31 +213,33 @@ function EventDetailModal({ event, onClose }: { event: any; onClose: () => void 
                   {displayFields.map((field, i) => {
                     const before = oldData[field];
                     const after = newData[field];
-                    const changed = JSON.stringify(before) !== JSON.stringify(after);
+                    const hasBefore = Object.prototype.hasOwnProperty.call(oldData, field);
+                    const hasAfter = Object.prototype.hasOwnProperty.call(newData, field);
+                    const changed = hasBefore && hasAfter && JSON.stringify(before) !== JSON.stringify(after);
                     return (
                       <tr
                         key={field}
-                        className={`border-b border-border/50 ${changed ? "" : "opacity-50"} ${i % 2 === 0 ? "bg-transparent" : "bg-muted/10"}`}
+                        className={`border-b border-border/50 ${i % 2 === 0 ? "bg-transparent" : "bg-muted/10"}`}
                       >
                         <td className="py-2.5 px-4 text-xs font-medium text-foreground">
                           {FIELD_LABELS[field] || field}
                         </td>
                         <td className="py-2.5 px-4 text-xs">
                           {before !== undefined && before !== null ? (
-                            <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] ${changed ? "bg-red-50 text-red-700 border border-red-200" : "text-muted-foreground"}`}>
-                              {String(before)}
-                            </span>
+                            <div className={`inline-block max-w-full px-2 py-0.5 rounded-md text-[11px] ${changed ? "bg-red-50 text-red-700 border border-red-200" : "text-muted-foreground"}`}>
+                              <HistoryValue value={before} />
+                            </div>
                           ) : (
-                            <span className="text-muted-foreground/40 text-[11px]">—</span>
+                            <span className="text-muted-foreground/60 text-[11px]">{hasBefore ? "—" : "غير وارد في اللقطة"}</span>
                           )}
                         </td>
                         <td className="py-2.5 px-4 text-xs">
                           {after !== undefined && after !== null ? (
-                            <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] ${changed ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "text-muted-foreground"}`}>
-                              {String(after)}
-                            </span>
+                            <div className={`inline-block max-w-full px-2 py-0.5 rounded-md text-[11px] ${changed ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "text-muted-foreground"}`}>
+                              <HistoryValue value={after} />
+                            </div>
                           ) : (
-                            <span className="text-muted-foreground/40 text-[11px]">—</span>
+                            <span className="text-muted-foreground/60 text-[11px]">{hasAfter ? "—" : "غير وارد في اللقطة"}</span>
                           )}
                         </td>
                       </tr>
@@ -285,11 +329,11 @@ function TimelineEvent({ event, isLast }: { event: any; isLast: boolean }) {
                     <div key={field} className="flex items-center gap-1.5 bg-white/60 rounded-lg px-2.5 py-1.5 border border-border/40">
                       <span className="font-medium text-foreground/70 shrink-0">{FIELD_LABELS[field] || field}:</span>
                       {before !== undefined && (
-                        <span className="text-red-600 line-through text-[10px] truncate">{String(before)}</span>
+                        <span className="text-red-600 text-[10px] truncate">{historyValue(before)}</span>
                       )}
                       {before !== undefined && after !== undefined && <span className="text-muted-foreground">→</span>}
                       {after !== undefined && (
-                        <span className="text-emerald-700 font-medium text-[10px] truncate">{String(after)}</span>
+                        <span className="text-emerald-700 font-medium text-[10px] truncate">{historyValue(after)}</span>
                       )}
                     </div>
                   );
@@ -322,6 +366,7 @@ export default function Tracking() {
     { key: "UPDATE", label: "تحديث" },
     { key: "TRANSFER", label: "نقل" },
     { key: "EXCLUDE", label: "استبعاد" },
+    {key:"WARRANTY",label:"استبدال بالضمان"},{key:"WARRANTY_REQUEST",label:"طلب ضمان"},{key:"WARRANTY_EDIT",label:"تعديل مسودة الضمان"},{key:"WARRANTY_SUBMIT",label:"تقديم طلب الضمان"},{key:"WARRANTY_REVIEW",label:"مراجعة طلب الضمان"},{key:"WARRANTY_CANCEL",label:"إلغاء طلب الضمان"},{key:"APPROVE",label:"اعتماد"},{key:"REVIEW",label:"طلب تصحيح"},{key:"CANCEL",label:"إلغاء مسودة"},{key:"INVENTORY",label:"جرد"},{key:"ATTACH",label:"مرفقات"},{key:"DOCUMENT",label:"وثائق"},
   ];
 
   // قراءة query params عند التحميل من جدول الأصول/العهد
@@ -332,8 +377,8 @@ export default function Tracking() {
     const name = params.get("name");
     const code = params.get("code");
     if (type && id && name) {
-      setSelectedEntity({ id: Number(id), type, name: decodeURIComponent(name), code: code ? decodeURIComponent(code) : null });
-      setSearchQuery(decodeURIComponent(name));
+      setSelectedEntity({ id: Number(id), type, name, code });
+      setSearchQuery(name);
     }
   }, [location]);
 
@@ -429,7 +474,7 @@ export default function Tracking() {
                     item.status === "EXCLUDED" ? "bg-red-50 text-red-700 border border-red-200" :
                     "bg-muted text-muted-foreground"
                   }`}>
-                    {item.status === "ACTIVE" ? "نشط" : item.status === "EXCLUDED" ? "مستبعد" : item.status}
+                    {item.status === "ACTIVE" ? "نشط" : item.status === "EXCLUDED" ? "مستبعد" : item.status === "REPLACED" ? "مستبدل بالضمان" : item.status}
                   </span>
                 </button>
               ))}

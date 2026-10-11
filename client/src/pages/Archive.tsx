@@ -2,13 +2,13 @@
  * Archive.tsx - الأرشيف
  * مربوط بالـ API الحقيقي عبر tRPC
  */
+import { openArchiveReportAsync, downloadArchiveReport, downloadArchiveDocument } from "@/lib/archiveReport";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
-import { useAuth } from "@/_core/hooks/useAuth";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 import {
   Archive as ArchiveIcon, Box, Download, Eye, FileText, FolderOpen,
@@ -19,112 +19,50 @@ import {
 // مكون تبويب أرشيف (أصول أو عهد)
 // =============================================
 function ArchiveEntityTab({ entityType, entityLabel }: { entityType: string; entityLabel: string }) {
-  const { user } = useAuth();
-  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchText, setSearchText] = useState("");
+  const [offset,setOffset]=useState(0);
+  useEffect(()=>{setOffset(0);setSelectedId(null);},[entityType]);
 
-  const { data: records, isLoading, refetch } = trpc.records.archive.list.useQuery({
+  const { data: records, isLoading, error, refetch } = trpc.records.archive.list.useQuery({
     entityType,
     search: searchText || undefined,
+    limit:100,offset,
   });
-  const deleteArchive = trpc.records.archive.delete.useMutation();
+  const {data:count}=trpc.records.archive.count.useQuery({entityType,search:searchText||undefined});
   const utils = trpc.useUtils();
 
   const filteredRecords = records || [];
 
-  const handleDelete = async () => {
-    if (!selectedId) { toast.warning("يرجى اختيار سجل أولاً"); return; }
-    const reason = prompt("سبب الحذف (مطلوب لصلاحيات المدير):");
-    if (!reason) return;
-    try {
-      await deleteArchive.mutateAsync({ id: selectedId, reason });
-      utils.records.archive.list.invalidate();
-      setSelectedId(null);
-      toast.success("تم حذف الوثيقة من الأرشيف");
-    } catch {
-      toast.error("حدث خطأ أثناء الحذف - قد تحتاج صلاحيات المدير");
-    }
-  };
-
-  const handlePrint = () => {
-    if (!selectedId) { toast.warning("يرجى اختيار سجل أولاً"); return; }
-    const record = filteredRecords.find((r: any) => r.id === selectedId);
-    if (!record) return;
-    const printWindow = window.open("", "_blank");
-    if (printWindow) {
-      printWindow.document.write(`
-        <html dir="rtl">
-        <head>
-          <title>طباعة - ${record.documentTitle}</title>
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap');
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: 'Tajawal', sans-serif; padding: 40px; color: #1a1a1a; background: #fff; }
-            .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #0d9488; }
-            .header h1 { font-size: 22px; color: #0d9488; margin-bottom: 5px; }
-            .header p { font-size: 12px; color: #888; }
-            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-            .info-table th { background: #f0fdfa; color: #0d9488; text-align: right; padding: 10px 15px; font-size: 13px; border: 1px solid #e0e0e0; width: 30%; }
-            .info-table td { padding: 10px 15px; font-size: 13px; border: 1px solid #e0e0e0; }
-            .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 15px; }
-            .print-btn { display: block; margin: 20px auto; padding: 10px 30px; background: #0d9488; color: white; border: none; border-radius: 8px; font-size: 14px; font-family: 'Tajawal', sans-serif; cursor: pointer; }
-            .print-btn:hover { background: #0f766e; }
-            @media print { .print-btn { display: none; } }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>نظام إدارة العهد والأصول</h1>
-            <p>وثيقة أرشيفية</p>
-          </div>
-          <table class="info-table">
-            <tr><th>رقم السجل</th><td>${record.id}</td></tr>
-            <tr><th>نوع العملية</th><td>${record.operationType}</td></tr>
-            <tr><th>عنوان الوثيقة</th><td>${record.documentTitle}</td></tr>
-            <tr><th>اسم الملف</th><td style="font-family: monospace; font-size: 11px;">${record.fileName}</td></tr>
-            <tr><th>تاريخ الإنشاء</th><td>${record.createdAt ? new Date(record.createdAt).toLocaleString("ar-SA") : "-"}</td></tr>
-          </table>
-          <div class="footer">
-            <p>تم الطباعة بتاريخ: ${new Date().toLocaleString("ar-SA")} | نظام إدارة العهد والأصول - الإصدار 2.0</p>
-          </div>
-          <button class="print-btn" onclick="window.print()">طباعة</button>
-        </body>
-        </html>
-      `);
-      printWindow.document.close();
-    }
-  };
+  const handlePrint = async () => { if(!selectedId){toast.warning("اختر وثيقة أولاً");return;}try{await openArchiveReportAsync(()=>utils.records.archive.getById.fetch({id:selectedId}));}catch(e:any){toast.error(e.message||"تعذر عرض الوثيقة");} };
+  const handleDownload=async()=>{if(!selectedId){toast.warning("اختر وثيقة أولاً");return;}try{downloadArchiveReport(await utils.records.archive.getById.fetch({id:selectedId}));}catch(e:any){toast.error(e.message||"تعذر تحميل الوثيقة");}};
 
   return (
     <div className="space-y-4">
       {/* شريط الأدوات */}
       <div className="flex items-center gap-2 flex-wrap">
         <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5"
-          onClick={() => { if (!selectedId) { toast.warning("يرجى اختيار سجل أولاً"); return; } toast.info("جاري فتح الملف..."); }}>
+          onClick={handlePrint}>
           <Eye className="w-3.5 h-3.5" /> عرض
         </Button>
         <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5"
-          onClick={() => { if (!selectedId) { toast.warning("يرجى اختيار سجل أولاً"); return; } toast.success("تم حفظ نسخة من الملف"); }}>
+          onClick={handleDownload}>
           <Download className="w-3.5 h-3.5" /> حفظ نسخة
         </Button>
         <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handlePrint}>
           <Printer className="w-3.5 h-3.5" /> طباعة
         </Button>
-        {canDelete && (
-          <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-destructive hover:text-destructive" onClick={handleDelete}>
-            <Trash2 className="w-3.5 h-3.5" /> حذف
-          </Button>
-        )}
+        <p className="text-xs text-muted-foreground">الوثائق التاريخية ثابتة؛ يمكن عرضها وطباعتها وحفظ نسخة.</p>
         <div className="mr-auto" />
         <div className="relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
           <input type="text" placeholder={`بحث في أرشيف ${entityLabel}...`} value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(e) => {setSearchText(e.target.value);setOffset(0);setSelectedId(null);}}
             className="h-8 w-56 pr-8 pl-3 rounded-lg bg-muted/50 border border-border text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all" />
         </div>
       </div>
 
+      {error&&<p role="alert" className="text-sm text-destructive">تعذر تحميل الأرشيف: {error.message}</p>}
       {/* الجدول */}
       <div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden">
         <div className="overflow-x-auto">
@@ -186,119 +124,34 @@ function ArchiveEntityTab({ entityType, entityLabel }: { entityType: string; ent
           </table>
         </div>
         <div className="px-3 py-2 bg-muted/20 border-t border-border">
-          <span className="text-[10px] text-muted-foreground">إجمالي السجلات: {filteredRecords.length}</span>
+          <ArchivePagination offset={offset} total={count?.total??0} count={filteredRecords.length} busy={isLoading} onChange={value=>{setOffset(value);setSelectedId(null);}}/>
         </div>
       </div>
     </div>
   );
+}
+function ArchivePagination({offset,total,count,busy,onChange}:{offset:number;total:number;count:number;busy:boolean;onChange:(offset:number)=>void}){
+ return <div className="flex items-center justify-between gap-3 text-xs"><span>{busy?'جاري تحميل الوثائق…':`عرض ${count?offset+1:0}–${count?offset+count:0} من أصل ${total}`}</span><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy||offset===0} onClick={()=>onChange(Math.max(0,offset-100))}>السابق</Button><Button variant="outline" size="sm" disabled={busy||offset+count>=total} onClick={()=>onChange(offset+100)}>التالي</Button></div></div>;
 }
 
 // =============================================
 // مكون تبويب التوثيق (رفع ملفات)
 // =============================================
 function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "documentation_custody" }) {
-  const { user } = useAuth();
-  const canDelete = user?.role === "owner" || user?.role === "admin";
   const [docTitle, setDocTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editNotes, setEditNotes] = useState("");
-  const [editOpType, setEditOpType] = useState("");
-  const [showEditModal, setShowEditModal] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [offset,setOffset]=useState(0);
+  useEffect(()=>setOffset(0),[entityType]);
   const label = entityType === "documentation_asset" ? "الأصول" : "العهد";
 
   const createArchive = trpc.records.archive.create.useMutation();
-  const deleteArchive = trpc.records.archive.delete.useMutation();
-  const updateArchive = trpc.records.archive.update.useMutation();
-  const { data: docs, isLoading } = trpc.records.archive.list.useQuery({ entityType });
+  const { data: docs, isLoading, error } = trpc.records.archive.list.useQuery({ entityType,limit:100,offset });
+  const {data:count}=trpc.records.archive.count.useQuery({entityType});
   const utils = trpc.useUtils();
 
-  const openEditModal = (doc: any) => {
-    setEditingId(doc.id);
-    setEditTitle(doc.documentTitle || "");
-    setEditNotes(doc.notes || "");
-    setEditOpType(doc.operationType || "");
-    setShowEditModal(true);
-  };
-
-  const handleEditSave = async () => {
-    if (!editingId) return;
-    if (!editTitle.trim()) { toast.warning("عنوان المستند مطلوب"); return; }
-    try {
-      await updateArchive.mutateAsync({
-        id: editingId,
-        documentTitle: editTitle.trim(),
-        notes: editNotes.trim() || null,
-        operationType: editOpType.trim() || undefined,
-      });
-      utils.records.archive.list.invalidate();
-      toast.success("تم تحديث بيانات المستند بنجاح");
-      setShowEditModal(false);
-      setEditingId(null);
-    } catch {
-      toast.error("حدث خطأ أثناء التحديث");
-    }
-  };
-
-  const handleDocDelete = async (id: number, title: string) => {
-    const reason = prompt(`سبب حذف "${title}" (مطلوب):`);
-    if (!reason) return;
-    try {
-      await deleteArchive.mutateAsync({ id, reason });
-      utils.records.archive.list.invalidate();
-      toast.success("تم حذف المستند");
-    } catch {
-      toast.error("حدث خطأ - قد تحتاج صلاحيات المدير");
-    }
-  };
-
-  const handleDocPrint = (doc: any) => {
-    const printWindow = window.open("", "_blank");
-    if (printWindow) {
-      printWindow.document.write(`
-        <html dir="rtl"><head><title>طباعة - ${doc.documentTitle}</title>
-        <style>@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap');
-        body{font-family:'Tajawal',sans-serif;padding:40px;color:#1a1a1a;}
-        h1{color:#0d9488;font-size:20px;margin-bottom:20px;border-bottom:2px solid #0d9488;padding-bottom:10px;}
-        table{width:100%;border-collapse:collapse;margin-top:20px;}
-        th{background:#f0fdfa;color:#0d9488;padding:10px;text-align:right;border:1px solid #e0e0e0;}
-        td{padding:10px;border:1px solid #e0e0e0;}
-        .footer{margin-top:30px;text-align:center;font-size:11px;color:#aaa;border-top:1px solid #eee;padding-top:15px;}
-        @media print{.no-print{display:none;}}</style></head>
-        <body>
-        <h1>نظام إدارة العهد والأصول - توثيق ${label}</h1>
-        <table>
-          <tr><th>رقم السجل</th><td>${doc.id}</td></tr>
-          <tr><th>العنوان</th><td>${doc.documentTitle}</td></tr>
-          <tr><th>اسم الملف</th><td style="font-family:monospace">${doc.fileName}</td></tr>
-          <tr><th>نوع العملية</th><td>${doc.operationType}</td></tr>
-          <tr><th>تاريخ الإنشاء</th><td>${doc.createdAt ? new Date(doc.createdAt).toLocaleString("ar-SA") : "-"}</td></tr>
-          ${doc.notes ? `<tr><th>ملاحظات</th><td>${doc.notes}</td></tr>` : ""}
-        </table>
-        <div class="footer">تم الطباعة بتاريخ: ${new Date().toLocaleString("ar-SA")}</div>
-        <button class="no-print" onclick="window.print()" style="margin-top:20px;padding:8px 24px;background:#0d9488;color:white;border:none;border-radius:6px;font-family:'Tajawal',sans-serif;font-size:14px;cursor:pointer;">طباعة</button>
-        </body></html>
-      `);
-      printWindow.document.close();
-    }
-  };
-
-  const handleDocDownload = (doc: any) => {
-    if (doc.filePath) {
-      // إذا كان الملف مرفوعاً على S3 - تحميل مباشر
-      const a = document.createElement("a");
-      a.href = doc.filePath;
-      a.download = doc.fileName || doc.documentTitle;
-      a.target = "_blank";
-      a.click();
-      toast.success("جاري تحميل الملف...");
-    } else {
-      // للسجلات القديمة التي لم تُرفع إلى S3
-      toast.warning("هذا المستند لم يُرفع إلى الخادم. يرجى حذفه وإعادة رفعه لتفعيل التحميل");
-    }
-  };
+  const handleDocPrint = async(doc:any)=>{try{await openArchiveReportAsync(()=>utils.records.archive.getById.fetch({id:doc.id}));}catch(e:any){toast.error(e.message||"تعذر عرض الوثيقة");}};
+  const handleDocDownload = async(doc:any)=>{try{downloadArchiveDocument(await utils.records.archive.getById.fetch({id:doc.id}));}catch(e:any){toast.error(e.message||"تعذر تحميل الوثيقة");}};
 
   const handleFileSelect = () => {
     const input = document.createElement("input");
@@ -335,6 +188,7 @@ function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "d
         filePath: fileUrl,
       });
       utils.records.archive.list.invalidate();
+      utils.records.archive.count.invalidate();setOffset(0);
       toast.success("تم حفظ المستند ورفعه بنجاح ✔️");
       setDocTitle("");
       setSelectedFile(null);
@@ -384,6 +238,7 @@ function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "d
         </div>
       </div>
 
+      {error&&<p role="alert" className="text-sm text-destructive">تعذر تحميل المستندات: {error.message}</p>}
       {/* قائمة المستندات المحفوظة */}
       <div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden">
         <div className="p-3 border-b border-border bg-muted/20">
@@ -436,22 +291,7 @@ function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "d
                       >
                         <Download className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        onClick={() => openEditModal(doc)}
-                        title="تعديل بيانات المستند"
-                        className="w-6 h-6 rounded flex items-center justify-center hover:bg-amber-50 text-amber-600 transition-colors"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </button>
-                      {canDelete && (
-                        <button
-                          onClick={() => handleDocDelete(doc.id, doc.documentTitle)}
-                          title="حذف"
-                          className="w-6 h-6 rounded flex items-center justify-center hover:bg-red-50 text-red-600 transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+
                     </div>
                   </td>
                 </tr>
@@ -460,71 +300,10 @@ function ArchiveDocsTab({ entityType }: { entityType: "documentation_asset" | "d
           </table>
         )}
       </div>
+      <ArchivePagination offset={offset} total={count?.total??0} count={docs?.length??0} busy={isLoading} onChange={setOffset}/>
 
       {/* ─── نافذة التعديل ─── */}
-      {showEditModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md mx-4 p-6">
-            <h3 className="text-base font-bold text-foreground mb-5 pb-3 border-b border-border">
-              تعديل بيانات المستند
-            </h3>
-            <div className="space-y-4">
-              {/* عنوان المستند */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-foreground">عنوان المستند <span className="text-destructive">*</span></label>
-                <input
-                  type="text"
-                  value={editTitle}
-                  onChange={e => setEditTitle(e.target.value)}
-                  placeholder="أدخل عنوان المستند..."
-                  className="w-full h-9 px-3 rounded-lg bg-muted/50 border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
-                  autoFocus
-                />
-              </div>
-              {/* نوع العملية */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-foreground">نوع العملية</label>
-                <input
-                  type="text"
-                  value={editOpType}
-                  onChange={e => setEditOpType(e.target.value)}
-                  placeholder="مثال: توثيق أصول، نقل ملكية..."
-                  className="w-full h-9 px-3 rounded-lg bg-muted/50 border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
-                />
-              </div>
-              {/* الملاحظات */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-foreground">ملاحظات</label>
-                <textarea
-                  value={editNotes}
-                  onChange={e => setEditNotes(e.target.value)}
-                  placeholder="أضف ملاحظات إضافية..."
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg bg-muted/50 border border-border text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
-                />
-              </div>
-            </div>
-            <div className="flex gap-2 justify-end mt-6 pt-4 border-t border-border">
-              <button
-                onClick={() => { setShowEditModal(false); setEditingId(null); }}
-                className="h-9 px-4 rounded-lg text-sm border border-border hover:bg-muted/50 transition-colors"
-              >
-                إلغاء
-              </button>
-              <button
-                onClick={handleEditSave}
-                disabled={updateArchive.isPending}
-                className="h-9 px-5 rounded-lg text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5 disabled:opacity-60"
-              >
-                {updateArchive.isPending ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : null}
-                حفظ التعديلات
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }

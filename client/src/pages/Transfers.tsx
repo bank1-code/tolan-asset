@@ -1,19 +1,22 @@
+import { escapeHtml } from "@shared/html";
+import { remainingQuantity } from "@shared/inventoryQuantity";
 /**
  * Design: Calm Luxury - عمليات النقل
  * مربوطة بالـ API الحقيقي عبر tRPC
  * - النقل الجزئي فقط (النقل الكلي مخفي من الواجهة)
- * - إجراءات: استعراض، تعديل، طباعة
+ * - إجراءات: استعراض وطباعة؛ الحركات المنفذة لا تعدل
  */
 import DashboardLayout from "@/components/DashboardLayout";
+import WorkflowConfirmationDialog from "@/components/WorkflowConfirmationDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import {
   ArrowLeftRight, ArrowRight, Box, Building2, Eye, Filter, HandCoins,
-  Loader2, MapPin, Pencil, Plus, Printer, Search, User
+  Loader2, MapPin, Plus, Printer, Search, User
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 // ─── دالة مساعدة لطباعة ورقة النقل ─────────────────────────────────────────
@@ -27,7 +30,7 @@ function printTransferSheet(t: any) {
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"/>
-<title>ورقة عملية نقل #${t.id}</title>
+<title>ورقة عملية نقل #${escapeHtml(t.id)}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -54,16 +57,17 @@ function printTransferSheet(t: any) {
 <body>
 <div class="header">
   <h1>ورقة عملية نقل</h1>
-  <p>رقم العملية: #${t.id} &nbsp;|&nbsp; التاريخ: ${date}</p>
-  <div style="margin-top:8px"><span class="badge">${typeLabel}</span></div>
+  <p>رقم العملية: #${escapeHtml(t.id)} &nbsp;|&nbsp; التاريخ: ${escapeHtml(date)}</p>
+  <div style="margin-top:8px"><span class="badge">${escapeHtml(typeLabel)}</span></div>
 </div>
 
 <div class="section">
   <div class="section-title">بيانات العنصر</div>
   <table>
-    <tr><th>النوع</th><td>${entityLabel}</td><th>الرمز</th><td>${t.entityCode || "-"}</td></tr>
-    <tr><th>الاسم</th><td colspan="3">${t.entityName || `${entityLabel} #${t.entityId}`}</td></tr>
-    <tr><th>الكمية المنقولة</th><td>${t.quantity}</td><th>القيمة</th><td>${t.assetValue || "-"}</td></tr>
+    <tr><th>النوع</th><td>${escapeHtml(entityLabel)}</td><th>الرمز</th><td>${escapeHtml(t.entityCode || "-")}</td></tr>
+    <tr><th>الاسم</th><td colspan="3">${escapeHtml(t.entityName || `${entityLabel} #${t.entityId}`)}</td></tr>
+    ${t.historicalSnapshot === false ? '<tr><td colspan="4">حركة قديمة: أسماء الموظفين والعنصر مستخرجة من البيانات الحالية؛ لم تحفظ تاريخيًا.</td></tr>' : ""}
+    <tr><th>الكمية المنقولة</th><td>${escapeHtml(t.quantity)}</td><th>القيمة</th><td>${escapeHtml(t.assetValue || "-")}</td></tr>
   </table>
 </div>
 
@@ -72,17 +76,17 @@ function printTransferSheet(t: any) {
   <div class="arrow-row">
     <div class="emp-box">
       <div class="emp-label">من الموظف</div>
-      <div class="emp-name">${t.fromEmployeeName || (t.fromEmployeeId ? `موظف #${t.fromEmployeeId}` : "غير محدد")}</div>
+      <div class="emp-name">${escapeHtml(t.fromEmployeeName || (t.fromEmployeeId ? `موظف #${t.fromEmployeeId}` : "غير محدد"))}</div>
     </div>
     <div class="arrow">←</div>
     <div class="emp-box">
       <div class="emp-label">إلى الموظف</div>
-      <div class="emp-name">${t.toEmployeeName || `موظف #${t.toEmployeeId}`}</div>
+      <div class="emp-name">${escapeHtml(t.toEmployeeName || `موظف #${t.toEmployeeId}`)}</div>
     </div>
   </div>
 </div>
 
-${t.notes ? `<div class="section"><div class="section-title">ملاحظات</div><p style="font-size:13px;padding:10px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">${t.notes}</p></div>` : ""}
+${t.notes ? `<div class="section"><div class="section-title">ملاحظات</div><p style="font-size:13px;padding:10px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">${escapeHtml(t.notes)}</p></div>` : ""}
 
 <div class="signatures">
   <div class="sig-box">المحوِّل<br/><br/><br/>التوقيع: ___________</div>
@@ -117,9 +121,6 @@ export default function Transfers() {
       utils.inventory.custody.list.invalidate();
     },
   });
-  const updateTransfer = trpc.operations.transfers.update.useMutation({
-    onSuccess: () => { utils.operations.transfers.list.invalidate(); },
-  });
 
   const transfers = transfersData || [];
   const allAssets = assetsData || [];
@@ -142,13 +143,6 @@ export default function Transfers() {
   const [viewRecord, setViewRecord] = useState<any>(null);
   const [showView, setShowView] = useState(false);
 
-  // ─── state للتعديل ────────────────────────────────────────────────────────
-  const [editRecord, setEditRecord] = useState<any>(null);
-  const [showEdit, setShowEdit] = useState(false);
-  const [editFromEmp, setEditFromEmp] = useState("none");
-  const [editToEmp, setEditToEmp] = useState("");
-  const [editNotes, setEditNotes] = useState("");
-
   // ─── state للطباعة (جلب بيانات كاملة) ────────────────────────────────────
   const [printingId, setPrintingId] = useState<number | null>(null);
 
@@ -166,15 +160,15 @@ export default function Transfers() {
 
   // ─── عناصر قابلة للنقل والبحث بالاسم أو الرمز ───────────────────────────────
   const transferableItems = useMemo(() => {
-    const assetItems = allAssets.filter((a: any) => a.status === "ACTIVE").map((a: any) => ({
+    const assetItems = allAssets.filter((a: any) => a.status === "ACTIVE" && remainingQuantity(a) > 0).map((a: any) => ({
       id: a.id, type: "asset" as const, code: a.assetCode || "", name: a.assetName || "",
-      quantity: a.quantity || 1, assignedTo: a.assignedTo, employeeName: a.employeeName || "غير محدد",
+      quantity: remainingQuantity(a), assignedTo: a.assignedTo, employeeName: a.employeeName || "غير محدد",
       departmentId: a.departmentId, departmentName: a.departmentName || "غير محدد",
       locationId: a.locationId, locationName: a.locationName || "غير محدد", branchId: (a as any).branchId, branchName: (a as any).branchName || "غير محدد",
     }));
-    const custodyItems = allCustody.filter((c: any) => c.status === "ACTIVE").map((c: any) => ({
+    const custodyItems = allCustody.filter((c: any) => c.status === "ACTIVE" && remainingQuantity(c) > 0).map((c: any) => ({
       id: c.id, type: "custody" as const, code: c.code || "", name: c.name || "",
-      quantity: c.quantity || 1, assignedTo: c.assignedTo, employeeName: c.employeeName || "غير محدد",
+      quantity: remainingQuantity(c), assignedTo: c.assignedTo, employeeName: c.employeeName || "غير محدد",
       departmentId: c.departmentId, departmentName: c.departmentName || "غير محدد",
       locationId: c.locationId, locationName: c.locationName || "غير محدد", branchId: (c as any).branchId, branchName: (c as any).branchName || "غير محدد",
     }));
@@ -220,13 +214,24 @@ export default function Transfers() {
   };
 
   // ─── تنفيذ النقل ───────────────────────────────────────────────────────────
-  const handleTransfer = async (e: React.FormEvent) => {
+  const [transferConfirmation, setTransferConfirmation] = useState(false);
+  const transferExecuting = useRef(false);
+  const handleTransfer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTransferItem || !toEmployeeId || !toLocationId || !toBranchId || !toDepartmentId) {
       toast.error("يرجى اختيار الأصل/العهدة والموظف والموقع والفرع والقسم الجديد"); return;
     }
+    if (createTransfer.isPending) return;
+    if (selectedTransferItem.assignedTo === Number(toEmployeeId) && selectedTransferItem.departmentId === Number(toDepartmentId) && selectedTransferItem.locationId === Number(toLocationId)) {
+      toast.error("اختر وجهة مختلفة عن التخصيص الحالي"); return;
+    }
+    setTransferConfirmation(true);
+  };
+  const executeTransfer = async () => {
+    if (!selectedTransferItem || createTransfer.isPending || transferExecuting.current) return;
+    transferExecuting.current = true;
     try {
-      await createTransfer.mutateAsync({
+      const result = await createTransfer.mutateAsync({
         entityType: selectedTransferItem.type,
         entityId: selectedTransferItem.id,
         movementType: "partial",
@@ -234,46 +239,21 @@ export default function Transfers() {
         toEmployeeId: Number(toEmployeeId),
         toLocationId: Number(toLocationId),
         toDepartmentId: Number(toDepartmentId),
-        quantity: selectedTransferItem.quantity,
         notes: null,
       });
-      toast.success("تم نقل الأصل/العهدة وتحديث الموظف والموقع والقسم بنجاح");
+      toast.success(`تم النقل بنجاح — رقم الحركة: ${result.id} — الكمية المنقولة: ${result.quantityMoved}`);
       setShowNew(false);
       resetTransferForm();
     } catch (error: any) {
       toast.error(error.message || "حدث خطأ أثناء النقل");
+    } finally {
+      transferExecuting.current = false;
+      setTransferConfirmation(false);
     }
   };
 
   // ─── فتح نافذة الاستعراض ──────────────────────────────────────────────────
   const handleView = (t: any) => { setViewRecord(t); setShowView(true); };
-
-  // ─── فتح نافذة التعديل ────────────────────────────────────────────────────
-  const handleEdit = (t: any) => {
-    setEditRecord(t);
-    setEditFromEmp(t.fromEmployeeId ? String(t.fromEmployeeId) : "none");
-    setEditToEmp(String(t.toEmployeeId));
-    setEditNotes(t.notes || "");
-    setShowEdit(true);
-  };
-
-  // ─── حفظ التعديل ──────────────────────────────────────────────────────────
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editToEmp) { toast.error("يرجى تحديد الموظف المستلم"); return; }
-    try {
-      await updateTransfer.mutateAsync({
-        id: editRecord.id,
-        fromEmployeeId: (editFromEmp && editFromEmp !== "none") ? Number(editFromEmp) : null,
-        toEmployeeId: Number(editToEmp),
-        notes: editNotes || null,
-      });
-      toast.success("تم تحديث بيانات عملية النقل");
-      setShowEdit(false);
-    } catch (error: any) {
-      toast.error(error.message || "حدث خطأ أثناء الحفظ");
-    }
-  };
 
   // ─── طباعة ورقة النقل ─────────────────────────────────────────────────────
   const handlePrint = (t: any) => { setPrintingId(t.id); };
@@ -312,7 +292,7 @@ export default function Transfers() {
       <div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.03)]">
         <div className="p-4 border-b border-border">
           <h3 className="text-sm font-bold text-foreground">سجل عمليات النقل</h3>
-          <p className="text-[11px] text-muted-foreground">جميع عمليات النقل المسجلة في النظام</p>
+          <p className="text-[11px] text-muted-foreground">عمليات نقل منفذة وتاريخية؛ متاحة للعرض والطباعة ولا يمكن تعديلها مباشرة.</p>
         </div>
         <div className="divide-y divide-border/50">
           {transfers.length === 0 ? (
@@ -332,17 +312,17 @@ export default function Transfers() {
                 {/* بيانات العملية */}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground">
-                    {t.entityType === "asset" ? "أصل" : "عهدة"} #{t.entityId}
+                    {t.entityName || (t.entityType === "asset" ? "أصل" : "عهدة")} {t.entityCode || `#${t.entityId}`}
                   </p>
                   <div className="flex items-center gap-2 mt-1">
                     <div className="flex items-center gap-1.5">
                       <User className="w-3 h-3 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground">{getEmployeeName(t.fromEmployeeId)}</span>
+                      <span className="text-xs text-muted-foreground">{t.fromEmployeeName ?? getEmployeeName(t.fromEmployeeId)}</span>
                     </div>
                     <ArrowRight className="w-3 h-3 text-primary" />
                     <div className="flex items-center gap-1.5">
                       <User className="w-3 h-3 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground">{getEmployeeName(t.toEmployeeId)}</span>
+                      <span className="text-xs text-muted-foreground">{t.toEmployeeName ?? getEmployeeName(t.toEmployeeId)}</span>
                     </div>
                   </div>
                 </div>
@@ -365,13 +345,6 @@ export default function Transfers() {
                     className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => handleEdit(t)}
-                    title="تعديل البيانات"
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => handlePrint(t)}
@@ -435,7 +408,7 @@ export default function Transfers() {
                   <div><span className="text-muted-foreground">الموظف الحالي</span><p className="font-semibold mt-1">{selectedTransferItem.employeeName}</p></div>
                   <div><span className="text-muted-foreground">الموقع الحالي</span><p className="font-semibold mt-1">{selectedTransferItem.locationName}</p></div>
                   <div><span className="text-muted-foreground">القسم الحالي</span><p className="font-semibold mt-1">{selectedTransferItem.departmentName}</p></div>
-                  <div><span className="text-muted-foreground">الكمية</span><p className="font-semibold mt-1">{selectedTransferItem.quantity}</p></div>
+                  <div><span className="text-muted-foreground">الكمية المتبقية القابلة للنقل</span><p className="font-semibold mt-1">{selectedTransferItem.quantity}</p></div>
                 </div>
               </div>
             )}
@@ -497,7 +470,12 @@ export default function Transfers() {
           </DialogHeader>
           {viewRecord && (
             <div className="space-y-4 mt-2">
+              <p className="text-xs text-muted-foreground">حركة منفذة لا يمكن تعديلها مباشرة. {!viewRecord.historicalSnapshot && "هذه حركة قديمة؛ أسماء الموظفين المعروضة مستخرجة من البيانات الحالية."}</p>
               <div className="grid grid-cols-2 gap-3">
+                <div className="bg-muted/30 rounded-lg p-3">
+                  <p className="text-[10px] text-muted-foreground mb-1">هوية السجل وقت النقل</p>
+                  <p className="text-sm font-bold">{viewRecord.entityName || "غير محفوظ تاريخيًا"} — {viewRecord.entityCode || `#${viewRecord.entityId}`}</p>
+                </div>
                 <div className="bg-muted/30 rounded-lg p-3">
                   <p className="text-[10px] text-muted-foreground mb-1">نوع العنصر</p>
                   <p className="text-sm font-bold">{viewRecord.entityType === "asset" ? "أصل" : "عهدة"}</p>
@@ -510,11 +488,11 @@ export default function Transfers() {
                 </div>
                 <div className="bg-muted/30 rounded-lg p-3">
                   <p className="text-[10px] text-muted-foreground mb-1">من الموظف</p>
-                  <p className="text-sm font-bold">{getEmployeeName(viewRecord.fromEmployeeId)}</p>
+                  <p className="text-sm font-bold">{viewRecord.fromEmployeeName ?? getEmployeeName(viewRecord.fromEmployeeId)}</p>
                 </div>
                 <div className="bg-muted/30 rounded-lg p-3">
                   <p className="text-[10px] text-muted-foreground mb-1">إلى الموظف</p>
-                  <p className="text-sm font-bold">{getEmployeeName(viewRecord.toEmployeeId)}</p>
+                  <p className="text-sm font-bold">{viewRecord.toEmployeeName ?? getEmployeeName(viewRecord.toEmployeeId)}</p>
                 </div>
                 <div className="bg-muted/30 rounded-lg p-3">
                   <p className="text-[10px] text-muted-foreground mb-1">الكمية</p>
@@ -535,9 +513,6 @@ export default function Transfers() {
                 <Button variant="outline" size="sm" onClick={() => { setShowView(false); handlePrint(viewRecord); }}>
                   <Printer className="w-3.5 h-3.5 ml-1" /> طباعة
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => { setShowView(false); handleEdit(viewRecord); }}>
-                  <Pencil className="w-3.5 h-3.5 ml-1" /> تعديل
-                </Button>
                 <Button size="sm" onClick={() => setShowView(false)}>إغلاق</Button>
               </div>
             </div>
@@ -545,66 +520,16 @@ export default function Transfers() {
         </DialogContent>
       </Dialog>
 
-      {/* ─── نافذة التعديل ────────────────────────────────────────────────── */}
-      <Dialog open={showEdit} onOpenChange={setShowEdit}>
-        <DialogContent className="max-w-lg" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold flex items-center gap-2">
-              <Pencil className="w-4 h-4 text-amber-600" />
-              تعديل عملية النقل #{editRecord?.id}
-            </DialogTitle>
-          </DialogHeader>
-          {editRecord && (
-            <form className="space-y-4 mt-2" onSubmit={handleSaveEdit}>
-              <div className="bg-muted/20 rounded-lg p-3 text-xs text-muted-foreground">
-                <strong>العنصر:</strong> {editRecord.entityType === "asset" ? "أصل" : "عهدة"} #{editRecord.entityId} &nbsp;|&nbsp;
-                <strong>نوع النقل:</strong> {editRecord.movementType === "total" ? "نقل كلي" : "نقل جزئي"}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-foreground">من (الموظف الحالي)</label>
-                  <Select value={editFromEmp} onValueChange={setEditFromEmp}>
-                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="الموظف الحالي" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">غير محدد</SelectItem>
-                      {employees.map((e: any) => (
-                        <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-foreground">إلى (الموظف الجديد) <span className="text-red-500">*</span></label>
-                  <Select value={editToEmp} onValueChange={setEditToEmp}>
-                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف" /></SelectTrigger>
-                    <SelectContent>
-                      {employees.map((e: any) => (
-                        <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">ملاحظات</label>
-                <textarea
-                  value={editNotes}
-                  onChange={(e) => setEditNotes(e.target.value)}
-                  placeholder="سبب النقل أو أي ملاحظات..."
-                  className="w-full h-16 px-3 py-2 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all resize-none"
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="outline" onClick={() => setShowEdit(false)}>إلغاء</Button>
-                <Button type="submit" disabled={updateTransfer.isPending}>
-                  {updateTransfer.isPending ? <Loader2 className="w-4 h-4 animate-spin ml-2" /> : null}
-                  حفظ التعديلات
-                </Button>
-              </div>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
+      <WorkflowConfirmationDialog
+        open={transferConfirmation}
+        title="تأكيد تنفيذ النقل"
+        description="سيحفظ النقل حركة تاريخية لا يمكن تعديلها أو حذفها مباشرة."
+        recordName={`${selectedTransferItem?.code ?? ""} · ${selectedTransferItem?.name ?? ""} · إلى ${getEmployeeName(Number(toEmployeeId))}`}
+        confirmLabel="تأكيد النقل"
+        pending={createTransfer.isPending}
+        onCancel={() => setTransferConfirmation(false)}
+        onConfirm={() => void executeTransfer()}
+      />
     </DashboardLayout>
   );
 }

@@ -1,3 +1,4 @@
+import { ROLES } from "../shared/roles";
 import {
   int,
   mysqlEnum,
@@ -10,6 +11,9 @@ import {
   bigint,
   date,
   boolean,
+  unique,
+  uniqueIndex,
+  foreignKey,
 } from "drizzle-orm/mysql-core";
 
 // =============================================
@@ -20,10 +24,11 @@ export const users = mysqlTable("users", {
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   username: varchar("username", { length: 100 }).unique(),
   passwordHash: varchar("passwordHash", { length: 255 }),
+  sessionVersion: varchar("sessionVersion", { length: 64 }),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["owner", "admin", "accountant", "employee"]).default("employee").notNull(),
+  role: mysqlEnum("role", ROLES).default("employee").notNull(),
   employeeId: int("employeeId").references(() => employees.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -39,6 +44,9 @@ export type InsertUser = typeof users.$inferInsert;
 export const branches = mysqlTable("branches", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
+  code: varchar("code", { length: 30 }).unique(),
+  sequenceNo: int("sequenceNo"),
+  departmentSequence: int("departmentSequence").default(0).notNull(),
   locationId: int("locationId").references(() => locations.id).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -53,6 +61,9 @@ export type InsertBranch = typeof branches.$inferInsert;
 export const departments = mysqlTable("departments", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
+  code: varchar("code", { length: 50 }).unique(),
+  sequenceNo: int("sequenceNo"),
+  employeeSequence: int("employeeSequence").default(0).notNull(),
   locationId: int("locationId").references(() => locations.id),
   branchId: int("branchId").references(() => branches.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -68,6 +79,16 @@ export type InsertDepartment = typeof departments.$inferInsert;
 export const locations = mysqlTable("locations", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
+  code: varchar("code", { length: 20 }).unique(),
+  assetPrefix: varchar("assetPrefix", { length: 40 }).unique(),
+  custodyPrefix: varchar("custodyPrefix", { length: 40 }).unique(),
+  branchSequence: int("branchSequence").default(0).notNull(),
+  assetSequence: int("assetSequence").default(0).notNull(),
+  custodySequence: int("custodySequence").default(0).notNull(),
+  assetSequencePeriod: varchar("assetSequencePeriod", { length: 4 }),
+  custodySequencePeriod: varchar("custodySequencePeriod", { length: 4 }),
+  assetPrefixLocked: boolean("assetPrefixLocked").default(false).notNull(),
+  custodyPrefixLocked: boolean("custodyPrefixLocked").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -81,6 +102,8 @@ export type InsertLocation = typeof locations.$inferInsert;
 export const employees = mysqlTable("employees", {
   id: int("id").autoincrement().primaryKey(),
   fullName: varchar("fullName", { length: 255 }).notNull(),
+  code: varchar("code", { length: 80 }).unique(),
+  sequenceNo: int("sequenceNo"),
   departmentId: int("departmentId").references(() => departments.id),
   fingerprintId: varchar("fingerprintId", { length: 100 }),
   nationalId: varchar("nationalId", { length: 100 }),
@@ -104,6 +127,109 @@ export const exclusionTypes = mysqlTable("exclusion_types", {
 export type ExclusionType = typeof exclusionTypes.$inferSelect;
 export type InsertExclusionType = typeof exclusionTypes.$inferInsert;
 
+// Financial classification is independent from the organisational department.
+export const financialClassifications = mysqlTable("financial_classifications", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 40 }).notNull().unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const depreciationControl = mysqlTable("depreciation_control", {
+  id: int("id").primaryKey(),
+  revision: int("revision").default(0).notNull(),
+});
+
+// Approved configuration versions are immutable; effective dates never overwrite history.
+export const depreciationPolicies = mysqlTable("depreciation_policies", {
+  id: int("id").autoincrement().primaryKey(),
+  status: varchar("status", { length: 20 }).default("DRAFT").notNull(),
+  version: int("version").default(0).notNull(),
+  effectiveDate: date("effectiveDate", { mode: "string" }).notNull(),
+  payload: json("payload").notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  updatedBy: int("updatedBy").notNull().references(() => users.id),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedAt: timestamp("approvedAt"),
+  reviewNote: text("reviewNote"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const depreciationBatches = mysqlTable("depreciation_batches", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: varchar("entityType", { length: 20 }).notNull(),
+  entityId: int("entityId").notNull(),
+  classificationId: int("classificationId").notNull(),
+  policyId: int("policyId").notNull().references(() => depreciationPolicies.id),
+  status: varchar("status", { length: 20 }).default("DRAFT").notNull(),
+  version: int("version").default(0).notNull(),
+  payload: json("payload").notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  updatedBy: int("updatedBy").notNull().references(() => users.id),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedAt: timestamp("approvedAt"),
+  reviewNote: text("reviewNote"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [foreignKey({name:"dep_batch_classification_fk",columns:[table.classificationId],foreignColumns:[financialClassifications.id]})]);
+
+export const depreciationMovements = mysqlTable("depreciation_movements", {
+  id: int("id").autoincrement().primaryKey(),
+  batchId: int("batchId").notNull().references(() => depreciationBatches.id),
+  kind: varchar("kind", { length: 30 }).notNull(),
+  effectiveDate: date("effectiveDate", { mode: "string" }).notNull(),
+  sourceKey: varchar("sourceKey", { length: 100 }),
+  status: varchar("status", { length: 20 }).default("DRAFT").notNull(),
+  version: int("version").default(0).notNull(),
+  payload: json("payload").notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  updatedBy: int("updatedBy").notNull().references(() => users.id),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedAt: timestamp("approvedAt"),
+  reviewNote: text("reviewNote"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const depreciationPeriods = mysqlTable("depreciation_periods", {
+  id: int("id").autoincrement().primaryKey(),
+  month: varchar("month", { length: 7 }).notNull().unique(),
+  status: varchar("status", { length: 20 }).default("DRAFT").notNull(),
+  version: int("version").default(0).notNull(),
+  snapshot: json("snapshot").notNull(),
+  inputHash: varchar("inputHash", { length: 64 }).notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  updatedBy: int("updatedBy").notNull().references(() => users.id),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedAt: timestamp("approvedAt"),
+  closedBy: int("closedBy").references(() => users.id),
+  closedAt: timestamp("closedAt"),
+  reviewNote: text("reviewNote"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const depreciationJournals = mysqlTable("depreciation_journals", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 60 }).notNull().unique(),
+  sourceKey: varchar("sourceKey", { length: 100 }).notNull().unique(),
+  periodId: int("periodId").references(() => depreciationPeriods.id),
+  movementId: int("movementId").references(() => depreciationMovements.id),
+  effectiveDate: date("effectiveDate", { mode: "string" }).notNull(),
+  kind: varchar("kind", { length: 30 }).notNull(),
+  snapshot: json("snapshot").notNull(),
+  approvedBy: int("approvedBy").notNull().references(() => users.id),
+  approvedAt: timestamp("approvedAt").defaultNow().notNull(),
+});
+
+export const depreciationExports = mysqlTable("depreciation_exports", {
+  id: int("id").autoincrement().primaryKey(),
+  fromDate: date("fromDate", { mode: "string" }).notNull(),
+  toDate: date("toDate", { mode: "string" }).notNull(),
+  snapshot: json("snapshot").notNull(),
+  contentHash: varchar("contentHash", { length: 64 }).notNull(),
+  exportedBy: int("exportedBy").notNull().references(() => users.id),
+  exportedAt: timestamp("exportedAt").defaultNow().notNull(),
+});
+
 // =============================================
 // 6. الأصول (assets)
 // =============================================
@@ -111,17 +237,28 @@ export const assets = mysqlTable("assets", {
   id: int("id").autoincrement().primaryKey(),
   assetName: varchar("assetName", { length: 500 }).notNull(),
   assetCode: varchar("assetCode", { length: 100 }),
+  classificationId: int("classificationId").references(() => financialClassifications.id),
   quantity: int("quantity").default(1).notNull(),
   assetValue: decimal("assetValue", { precision: 12, scale: 2 }).default("0"),
   condition: varchar("condition", { length: 50 }).default("جيد جدًا"),
   assignedTo: int("assignedTo").references(() => employees.id),
   departmentId: int("departmentId").references(() => departments.id),
   locationId: int("locationId").references(() => locations.id),
-  status: varchar("status", { length: 30 }).default("ACTIVE").notNull(),
+  originLocationId: int("originLocationId").references(() => locations.id),
+  status: varchar("status", { length: 30 }).default("DRAFT").notNull(),
+  draftVersion: int("draftVersion").default(0).notNull(),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedAt: timestamp("approvedAt"),
+  approvalSnapshot: json("approvalSnapshot"),
+  reviewNote: text("reviewNote"),
   notes: text("notes"),
   assetImagePath: text("assetImagePath"),
   invoiceImagePath: text("invoiceImagePath"),
   excludedQuantity: int("excludedQuantity").default(0),
+  warrantyReplacedQuantity: int("warrantyReplacedQuantity").default(0).notNull(),
+  serialNumbers: json("serialNumbers"),
+  warrantyStartDate: date("warrantyStartDate", { mode: "string" }),
+  warrantyEndDate: date("warrantyEndDate", { mode: "string" }),
   exclusionDate: timestamp("exclusionDate"),
   excludedBy: varchar("excludedBy", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -131,11 +268,23 @@ export const assets = mysqlTable("assets", {
 export type Asset = typeof assets.$inferSelect;
 export type InsertAsset = typeof assets.$inferInsert;
 
+// New approvals reserve numbers here. Legacy duplicate codes are preserved.
+export const inventoryApprovalNumbers = mysqlTable("inventory_approval_numbers", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: varchar("entityType", { length: 20 }).notNull(),
+  entityId: int("entityId").notNull(),
+  code: varchar("code", { length: 100 }).notNull(),
+  approvedBy: int("approvedBy").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [unique("inventory_approval_number_unique").on(table.entityType, table.code),
+  unique("inventory_approval_entity_unique").on(table.entityType, table.entityId)]);
+
 // =============================================
 // 7. العهد (custody_items)
 // =============================================
 export const custodyItems = mysqlTable("custody_items", {
   id: int("id").autoincrement().primaryKey(),
+  classificationId: int("classificationId").references(() => financialClassifications.id),
   name: varchar("name", { length: 500 }).notNull(),
   code: varchar("code", { length: 100 }),
   quantity: int("quantity").default(1).notNull(),
@@ -144,11 +293,21 @@ export const custodyItems = mysqlTable("custody_items", {
   assignedTo: int("assignedTo").references(() => employees.id),
   departmentId: int("departmentId").references(() => departments.id),
   locationId: int("locationId").references(() => locations.id),
-  status: varchar("status", { length: 30 }).default("ACTIVE").notNull(),
+  originLocationId: int("originLocationId").references(() => locations.id),
+  status: varchar("status", { length: 30 }).default("DRAFT").notNull(),
+  draftVersion: int("draftVersion").default(0).notNull(),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedAt: timestamp("approvedAt"),
+  approvalSnapshot: json("approvalSnapshot"),
+  reviewNote: text("reviewNote"),
   notes: text("notes"),
   assetImagePath: text("assetImagePath"),
   invoiceImagePath: text("invoiceImagePath"),
   excludedQuantity: int("excludedQuantity").default(0),
+  warrantyReplacedQuantity: int("warrantyReplacedQuantity").default(0).notNull(),
+  serialNumbers: json("serialNumbers"),
+  warrantyStartDate: date("warrantyStartDate", { mode: "string" }),
+  warrantyEndDate: date("warrantyEndDate", { mode: "string" }),
   exclusionDate: timestamp("exclusionDate"),
   excludedBy: varchar("excludedBy", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -157,6 +316,25 @@ export const custodyItems = mysqlTable("custody_items", {
 
 export type CustodyItem = typeof custodyItems.$inferSelect;
 export type InsertCustodyItem = typeof custodyItems.$inferInsert;
+
+export const warrantyReplacements = mysqlTable("warranty_replacements", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: varchar("entityType", { length: 20 }).notNull(),
+  entityId: int("entityId").notNull(),
+  status: varchar("status", { length: 20 }).default("DRAFT").notNull(),
+  version: int("version").default(0).notNull(),
+  payload: json("payload").notNull(),
+  sourceSnapshot: json("sourceSnapshot").notNull(),
+  executionSnapshot: json("executionSnapshot"),
+  replacementEntityId: int("replacementEntityId"),
+  operationCode: varchar("operationCode", { length: 50 }).unique(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  createdByName: varchar("createdByName", { length: 255 }),
+  executedBy: int("executedBy").references(() => users.id),
+  executedAt: timestamp("executedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [unique("warranty_replacement_entity_unique").on(table.entityType, table.replacementEntityId)]);
 
 // =============================================
 // 8. نقل الأصول (asset_transfers)
@@ -190,7 +368,14 @@ export const assetExclusions = mysqlTable("asset_exclusions", {
   id: int("id").autoincrement().primaryKey(),
   entityType: varchar("entityType", { length: 20 }).notNull(), // 'asset' | 'custody'
   entityId: int("entityId").notNull(),
-  exclusionCode: varchar("exclusionCode", { length: 50 }).notNull(),
+  exclusionCode: varchar("exclusionCode", { length: 50 }).notNull().unique(),
+  entityName: varchar("entityName", { length: 500 }),
+  entityCode: varchar("entityCode", { length: 100 }),
+  originalQuantity: int("originalQuantity"),
+  previouslyExcluded: int("previouslyExcluded"),
+  originalUnitValue: decimal("originalUnitValue", { precision: 12, scale: 2 }),
+  entitySnapshot: json("entitySnapshot"),
+  effectiveDate: date("effectiveDate", { mode: "string" }),
   exclusionMode: varchar("exclusionMode", { length: 10 }).default("full").notNull(), // 'full' | 'partial'
   exclusionTypeId: int("exclusionTypeId").references(() => exclusionTypes.id),
   reason: text("reason").notNull(),
@@ -210,6 +395,26 @@ export const assetExclusions = mysqlTable("asset_exclusions", {
 
 export type AssetExclusion = typeof assetExclusions.$inferSelect;
 export type InsertAssetExclusion = typeof assetExclusions.$inferInsert;
+
+export const exclusionAttachments = mysqlTable("exclusion_attachments", {
+  id: int("id").autoincrement().primaryKey(),
+  exclusionId: int("exclusionId").notNull().references(() => assetExclusions.id),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  url: text("url").notNull(),
+  contentType: varchar("contentType", { length: 100 }).notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  createdByName: varchar("createdByName", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+// Drafts never affect inventory or consume an execution number.
+export const exclusionDrafts = mysqlTable("exclusion_drafts", {
+  id: int("id").autoincrement().primaryKey(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  payload: json("payload").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
 
 // =============================================
 // 10. براءة الذمة (clearance_records)
@@ -274,6 +479,10 @@ export const archiveDocuments = mysqlTable("archive_documents", {
   assetId: int("assetId"),
   custodyId: int("custodyId"),
   transferId: int("transferId"),
+  exclusionId: int("exclusionId"),
+  inventorySessionId: int("inventorySessionId"),
+  sourceKey: varchar("sourceKey", { length: 100 }).unique(),
+  snapshot: json("snapshot"),
   documentTitle: text("documentTitle").notNull(),
   fileName: text("fileName").notNull(),
   filePath: text("filePath"),
@@ -328,7 +537,7 @@ export type InsertAuditLogEntry = typeof auditLog.$inferInsert;
 // =============================================
 export const exclusionSequence = mysqlTable("exclusion_sequence", {
   id: int("id").autoincrement().primaryKey(),
-  year: int("year").notNull(),
+  year: int("year").notNull().unique(),
   seq: int("seq").notNull(),
 });
 
@@ -342,15 +551,56 @@ export const inventorySessions = mysqlTable("inventory_sessions", {
   id: int("id").autoincrement().primaryKey(),
   departmentId: int("departmentId").references(() => departments.id),
   departmentName: varchar("departmentName", { length: 255 }),
-  sessionType: mysqlEnum("sessionType", ["assets", "custody"]).notNull(),
-  totalCount: int("totalCount").default(0).notNull(),
-  scannedCount: int("scannedCount").default(0).notNull(),
-  missingCount: int("missingCount").default(0).notNull(),
-  items: json("items").notNull(), // [{id, code, name, status: 'scanned'|'missing'}]
+  // Keep the API names while using this installation's existing SQL columns.
+  sessionType: varchar("entityType", { length: 20 }).notNull(),
+  totalCount: int("totalItems").default(0).notNull(),
+  scannedCount: int("scannedItems").default(0).notNull(),
+  missingCount: int("missingItems").default(0).notNull(),
+  items: json("sessionData"), // [{id, code, name, status: 'scanned'|'missing'}]
   performedBy: int("performedBy").references(() => users.id),
   performedByName: varchar("performedByName", { length: 255 }),
+  status: varchar("status", { length: 20 }).default("APPROVED").notNull(),
+  version: int("version").default(0).notNull(),
+  approvedBy: int("approvedBy").references(() => users.id),
+  approvedByName: varchar("approvedByName", { length: 255 }),
+  approvedAt: timestamp("approvedAt"),
+  scope: json("scope"),
+  reviewNote: text("reviewNote"),
+  overlapReason: text("overlapReason"),
+  submittedAt: timestamp("submittedAt"),
+  lastSaveKey: varchar("lastSaveKey", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+export const inventoryDifferences = mysqlTable("inventory_differences", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("sessionId").notNull().references(() => inventorySessions.id),
+  entityType: varchar("entityType", { length: 20 }).notNull(),
+  entityId: int("entityId").notNull(),
+  code: varchar("code", { length: 100 }).notNull(),
+  name: varchar("name", { length: 500 }).notNull(),
+  expectedQuantity: int("expectedQuantity").notNull(),
+  actualQuantity: int("actualQuantity").notNull(),
+  difference: int("difference").notNull(),
+  reason: text("reason").notNull(),
+  itemSnapshot: json("itemSnapshot"),
+  workQuantity: int("workQuantity"),
+  identityMismatch: boolean("identityMismatch").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({ sessionEntity: uniqueIndex("inventory_differences_session_entity_unique").on(table.sessionId, table.entityType, table.entityId) }));
+
+export const inventoryDifferenceActions = mysqlTable("inventory_difference_actions", {
+  id: int("id").autoincrement().primaryKey(),
+  differenceId: int("differenceId").notNull(),
+  actionType: varchar("actionType", { length: 20 }).notNull(),
+  quantity: int("quantity").default(0).notNull(),
+  operationKey: varchar("operationKey", { length: 100 }).unique(),
+  note: text("note").notNull(),
+  evidence: json("evidence"),
+  performedBy: int("performedBy").notNull().references(() => users.id),
+  performedByName: varchar("performedByName", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({ differenceReference: foreignKey({ name: "inventory_diff_action_difference_fk", columns: [table.differenceId], foreignColumns: [inventoryDifferences.id] }) }));
 export type InventorySession = typeof inventorySessions.$inferSelect;
 export type InsertInventorySession = typeof inventorySessions.$inferInsert;
 
@@ -363,6 +613,7 @@ export const appSettings = mysqlTable("app_settings", {
   systemName: varchar("systemName", { length: 150 }).default("إدارة العهد والأصول").notNull(),
   systemSubtitle: varchar("systemSubtitle", { length: 200 }).default("نظام سحابي متكامل").notNull(),
   logoUrl: text("logoUrl"),
+  locationSequence: int("locationSequence").default(0).notNull(),
   updatedBy: int("updatedBy").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

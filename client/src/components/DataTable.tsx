@@ -24,6 +24,7 @@ interface DataTableProps<T> {
   actions?: (item: T) => React.ReactNode;
   emptyMessage?: string;
   pageSize?: number;
+  serverPagination?: {page: number; total: number; onPageChange: (page: number) => void; search: string; onSearchChange: (search: string) => void};
 }
 
 export default function DataTable<T extends Record<string, any>>({
@@ -36,9 +37,14 @@ export default function DataTable<T extends Record<string, any>>({
   actions,
   emptyMessage = "لا توجد بيانات",
   pageSize = 10,
+  serverPagination,
 }: DataTableProps<T>) {
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  const [localSearch, setLocalSearch] = useState("");
+  const [localPage, setLocalPage] = useState(1);
+  const search = serverPagination?.search ?? localSearch;
+  const page = serverPagination?.page ?? localPage;
+  const setSearch = serverPagination?.onSearchChange ?? setLocalSearch;
+  const setPage = serverPagination?.onPageChange ?? setLocalPage;
 
   // دالة مساعدة: هل النص يحتوي على كلمة البحث؟
   const matchesSearch = (item: T): boolean => {
@@ -63,12 +69,13 @@ export default function DataTable<T extends Record<string, any>>({
     );
   };
 
-  const filtered = (searchKey || searchKeys)
+  const filtered = !serverPagination && (searchKey || searchKeys)
     ? data.filter(matchesSearch)
     : data;
 
-  const totalPages = Math.ceil(filtered.length / pageSize);
-  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const total = serverPagination?.total ?? filtered.length;
+  const totalPages = Math.ceil(total / pageSize);
+  const paginated = serverPagination ? data : filtered.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.03)]">
@@ -154,7 +161,7 @@ export default function DataTable<T extends Record<string, any>>({
       {totalPages > 1 && (
         <div className="flex items-center justify-between px-4 py-3 border-t border-border">
           <p className="text-xs text-muted-foreground">
-            عرض {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, filtered.length)} من {filtered.length}
+            عرض {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, total)} من {total}
           </p>
           <div className="flex items-center gap-1">
             <Button
@@ -166,7 +173,7 @@ export default function DataTable<T extends Record<string, any>>({
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </Button>
-            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map(
+            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => Math.max(1, Math.min(page - 2, totalPages - 4)) + i).map(
               (p) => (
                 <Button
                   key={p}

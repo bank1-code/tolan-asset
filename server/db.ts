@@ -1,4 +1,5 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -109,4 +110,21 @@ export async function getUserByUsername(username: string) {
   const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function initializeSessionVersion(openId: string) {
+  const database = await getDb();
+  if (!database) throw new Error("Database unavailable");
+  // Atomic initialization keeps concurrent logins on the same epoch.
+  await database.update(users).set({ sessionVersion: randomUUID() })
+    .where(and(eq(users.openId, openId), isNull(users.sessionVersion)));
+  const user = await getUserByOpenId(openId);
+  if (!user?.sessionVersion) throw new Error("Account unavailable");
+  return user;
+}
+
+export async function revokeUserSessions(userId: number) {
+  const database = await getDb();
+  if (!database) throw new Error("Database unavailable");
+  await database.update(users).set({ sessionVersion: randomUUID() }).where(eq(users.id, userId));
 }

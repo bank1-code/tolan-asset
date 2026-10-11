@@ -3,6 +3,9 @@
  * حماية من: XSS, CSRF, SQL Injection, Rate Limiting, Brute Force
  */
 import type { Request, Response, NextFunction, Express } from "express";
+import {parse as parseCookie} from "cookie";
+import {COOKIE_NAME} from "../shared/const";
+import {sdk} from "./_core/sdk";
 
 // =============================================
 // 1. Rate Limiter - حماية من هجمات DDoS والقوة الغاشمة
@@ -13,14 +16,24 @@ interface RateLimitStore {
 
 const rateLimitStore: RateLimitStore = {};
 
-function getRateLimitKey(req: Request): string {
+async function getRateLimitKey(req: Request): Promise<string> {
   const ip = req.ip || req.socket.remoteAddress || "unknown";
+  // Login stays IP-bound, even when the caller supplies a valid session.
+  if (!req.path.includes("localAuth.login")) {
+    try {
+      const token = parseCookie(req.headers.cookie || "")[COOKIE_NAME];
+      if (token && token.length <= 8192) {
+        const user = await sdk.authenticateRequest(req);
+        return `rate:user:${user.id}`;
+      }
+    } catch { /* Invalid cookies retain the anonymous IP budget. */ }
+  }
   return `rate:${ip}`;
 }
 
 export function rateLimiter(maxRequests: number = 100, windowMs: number = 60000) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const key = getRateLimitKey(req);
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const key = await getRateLimitKey(req);
     const now = Date.now();
 
     if (!rateLimitStore[key] || rateLimitStore[key].resetAt < now) {
@@ -254,10 +267,21 @@ export async function logAuditAction(params: {
 // 7. تطبيق جميع طبقات الأمان
 // =============================================
 export function applySecurityMiddleware(app: Express) {
+  app.use((req,res,next)=>{
+    const origin=req.headers.origin;
+    if (!['GET','HEAD','OPTIONS'].includes(req.method) && origin) {
+      try {
+        const parsed=new URL(origin);
+        const allowed=process.env.PUBLIC_APP_URL ? parsed.origin === new URL(process.env.PUBLIC_APP_URL).origin : ['http:','https:'].includes(parsed.protocol) && parsed.host === req.headers.host;
+        if (!allowed) return res.status(403).json({error:'مصدر الطلب غير مصرح به'});
+      } catch { return res.status(403).json({error:'مصدر الطلب غير صالح'}); }
+    }
+    next();
+  });
   // ترويسات الأمان
   app.use(securityHeaders);
 
-  // Rate Limiting - 200 طلب في الدقيقة
+  // 200/min per verified identity; anonymous and login requests stay IP-bound.
   app.use("/api", rateLimiter(200, 60000));
 
   // حماية من القوة الغاشمة

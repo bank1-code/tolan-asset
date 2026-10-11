@@ -1,9 +1,16 @@
+
+import {legacyFixture} from './test-utils/legacyFixture';
+const isolated=vi.hoisted(()=>({db:null}));
+vi.mock('./db',()=>({getDb:async()=>isolated.db,revokeUserSessions:vi.fn()}));
+vi.mock('./security',()=>({logAuditAction:vi.fn(),clearBruteForceBlock:vi.fn()}));
+vi.mock('./storage',()=>({storagePut:vi.fn(async()=>({url:'/api/files/test/backup.tln'}))}));
+beforeEach(()=>{isolated.db=legacyFixture();});
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
 // Mock authenticated user context
-function createMockContext(role: "admin" | "user" = "admin"): TrpcContext {
+function createMockContext(role: "admin" | "accountant" = "admin"): TrpcContext {
   return {
     user: {
       id: 1,
@@ -50,7 +57,8 @@ describe("Auth API", () => {
     const caller = appRouter.createCaller(ctx);
     const result = await caller.auth.me();
     expect(result).toBeDefined();
-    expect(result?.openId).toBe("test-user-123");
+    expect(result?.id).toBe(1);
+    expect(result).not.toHaveProperty("passwordHash");
     expect(result?.role).toBe("admin");
   });
 

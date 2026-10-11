@@ -1,8 +1,19 @@
+import {
+  countWorkflowProcedures,
+  sessionItems,
+} from "../inventoryCountWorkflow";
+import {
+  visibleCountItems,
+  normalizeCountItems,
+} from "../../shared/inventoryCount";
+import { parseHistoryData } from "../history";
+import { canApprove } from "../../shared/roles";
+import { remainingQuantity } from "../../shared/inventoryQuantity";
 /**
  * Inventory Count Router - الجرد
  */
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { operatorProcedure, deleteProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
@@ -14,9 +25,9 @@ import {
   employees,
 } from "../../drizzle/schema";
 import { TRPCError } from "@trpc/server";
-import { logAuditAction } from "../security";
 
 export const inventoryCountRouter = router({
+  ...countWorkflowProcedures,
   // جلب الأصول حسب القسم
   getAssetsByDepartment: operatorProcedure
     .input(z.object({ departmentId: z.number() }))
@@ -30,7 +41,13 @@ export const inventoryCountRouter = router({
           name: assets.assetName,
         })
         .from(assets)
-        .where(eq(assets.departmentId, input.departmentId));
+        .where(
+          and(
+            eq(assets.departmentId, input.departmentId),
+            eq(assets.status, "ACTIVE"),
+            sql`${assets.quantity} - COALESCE(${assets.excludedQuantity}, 0) - ${assets.warrantyReplacedQuantity} > 0`
+          )
+        );
     }),
 
   // جلب العهد حسب القسم
@@ -46,7 +63,13 @@ export const inventoryCountRouter = router({
           name: custodyItems.name,
         })
         .from(custodyItems)
-        .where(eq(custodyItems.departmentId, input.departmentId));
+        .where(
+          and(
+            eq(custodyItems.departmentId, input.departmentId),
+            eq(custodyItems.status, "ACTIVE"),
+            sql`${custodyItems.quantity} - COALESCE(${custodyItems.excludedQuantity}, 0) - ${custodyItems.warrantyReplacedQuantity} > 0`
+          )
+        );
     }),
 
   // البحث عن أصل أو عهدة بالكود (للاستعراض عبر NFC)
@@ -63,6 +86,11 @@ export const inventoryCountRouter = router({
           assetCode: assets.assetCode,
           assetName: assets.assetName,
           quantity: assets.quantity,
+          excludedQuantity: assets.excludedQuantity,
+          warrantyReplacedQuantity: assets.warrantyReplacedQuantity,
+          serialNumbers: assets.serialNumbers,
+          warrantyStartDate: assets.warrantyStartDate,
+          warrantyEndDate: assets.warrantyEndDate,
           assetValue: assets.assetValue,
           condition: assets.condition,
           status: assets.status,
@@ -78,7 +106,9 @@ export const inventoryCountRouter = router({
         .leftJoin(departments, eq(assets.departmentId, departments.id))
         .leftJoin(locations, eq(assets.locationId, locations.id))
         .leftJoin(employees, eq(assets.assignedTo, employees.id))
-        .where(eq(assets.assetCode, input.code))
+        .where(
+          and(eq(assets.assetCode, input.code), eq(assets.status, "ACTIVE"))
+        )
         .limit(1);
 
       if (assetRows.length > 0) {
@@ -89,7 +119,12 @@ export const inventoryCountRouter = router({
           id: row.id,
           code: row.assetCode ?? "",
           name: row.assetName,
-          quantity: row.quantity,
+          quantity: Math.max(0, remainingQuantity(row)),
+          originalQuantity: row.quantity,
+          warrantyReplacedQuantity: row.warrantyReplacedQuantity,
+          serialNumbers: row.serialNumbers,
+          warrantyStartDate: row.warrantyStartDate,
+          warrantyEndDate: row.warrantyEndDate,
           assetValue: row.assetValue,
           condition: row.condition,
           status: row.status,
@@ -110,6 +145,11 @@ export const inventoryCountRouter = router({
           code: custodyItems.code,
           name: custodyItems.name,
           quantity: custodyItems.quantity,
+          excludedQuantity: custodyItems.excludedQuantity,
+          warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity,
+          serialNumbers: custodyItems.serialNumbers,
+          warrantyStartDate: custodyItems.warrantyStartDate,
+          warrantyEndDate: custodyItems.warrantyEndDate,
           assetValue: custodyItems.assetValue,
           condition: custodyItems.condition,
           status: custodyItems.status,
@@ -125,7 +165,12 @@ export const inventoryCountRouter = router({
         .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
         .leftJoin(locations, eq(custodyItems.locationId, locations.id))
         .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
-        .where(eq(custodyItems.code, input.code))
+        .where(
+          and(
+            eq(custodyItems.code, input.code),
+            eq(custodyItems.status, "ACTIVE")
+          )
+        )
         .limit(1);
 
       if (custodyRows.length > 0) {
@@ -136,7 +181,12 @@ export const inventoryCountRouter = router({
           id: row.id,
           code: row.code ?? "",
           name: row.name,
-          quantity: row.quantity,
+          quantity: Math.max(0, remainingQuantity(row)),
+          originalQuantity: row.quantity,
+          warrantyReplacedQuantity: row.warrantyReplacedQuantity,
+          serialNumbers: row.serialNumbers,
+          warrantyStartDate: row.warrantyStartDate,
+          warrantyEndDate: row.warrantyEndDate,
           assetValue: row.assetValue,
           condition: row.condition,
           status: row.status,
@@ -153,74 +203,42 @@ export const inventoryCountRouter = router({
       return { found: false as const };
     }),
 
-  // حفظ جلسة جرد
-  saveSession: operatorProcedure
-    .input(
-      z.object({
-        departmentId: z.number().optional(),
-        departmentName: z.string().optional(),
-        sessionType: z.enum(["assets", "custody"]),
-        totalCount: z.number(),
-        scannedCount: z.number(),
-        missingCount: z.number(),
-        items: z.array(
-          z.object({
-            id: z.number(),
-            code: z.string(),
-            name: z.string(),
-            status: z.enum(["scanned", "missing"]),
-          })
-        ),
-      })
-    )
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      const result = await db.insert(inventorySessions).values({
-        departmentId: input.departmentId ?? null,
-        departmentName: input.departmentName ?? null,
-        sessionType: input.sessionType,
-        totalCount: input.totalCount,
-        scannedCount: input.scannedCount,
-        missingCount: input.missingCount,
-        items: input.items,
-        performedBy: ctx.user?.id ?? null,
-        performedByName: ctx.user?.name ?? null,
-      });
-
-      await logAuditAction({
-        tableName: "inventory_sessions",
-        recordId: Number(result[0].insertId),
-        actionType: "INVENTORY",
-        actionDescription: `جلسة جرد ${input.sessionType === "assets" ? "أصول" : "عهد"} - ${input.items.length} عنصر`,
-        newData: input,
-        performedBy: ctx.user.id,
-        performedByName: ctx.user.name || undefined,
-        ipAddress: ctx.req.ip || undefined,
-        userAgent: ctx.req.headers["user-agent"] || undefined,
-      });
-
-      return { success: true, id: Number(result[0].insertId) };
-    }),
-
   // جلب جميع الجلسات
-  getSessions: operatorProcedure.query(async () => {
+  getSessions: operatorProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    return db
+    const sessions = await db
       .select()
       .from(inventorySessions)
       .orderBy(desc(inventorySessions.createdAt));
+    return sessions
+      .filter(
+        session =>
+          session.status === "APPROVED" ||
+          canApprove(ctx.user.role) ||
+          session.performedBy === ctx.user.id
+      )
+      .map(session => ({
+        ...session,
+        status: session.status || "APPROVED",
+        sessionType:
+          session.sessionType === "asset" ? "assets" : session.sessionType,
+        items: visibleCountItems(
+          normalizeCountItems(sessionItems(session.items), session.sessionType),
+          session.status,
+          parseHistoryData(session.scope)
+        ),
+        scope: parseHistoryData(session.scope),
+      }));
   }),
 
   // حذف جلسة
   deleteSession: deleteProcedure
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.delete(inventorySessions).where(eq(inventorySessions.id, input.id));
-      return { success: true };
+    .mutation(() => {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "جلسة الجرد حدث تاريخي لا يمكن حذفه",
+      });
     }),
 });

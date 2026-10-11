@@ -7,15 +7,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Edit, Eye, EyeOff, Loader2, Plus, ShieldCheck, Trash2, User, KeyRound } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ROLES, ROLE_LABELS, type Role } from "@shared/roles";
 
-type Role = "owner" | "admin" | "accountant" | "employee";
-
-const roleLabel: Record<Role, string> = {
-  owner: "المالك",
-  admin: "مدير النظام",
-  accountant: "المحاسب",
-  employee: "الموظف",
-};
+const roleLabel = ROLE_LABELS;
 
 export default function UsersPage() {
   const utils = trpc.useUtils();
@@ -51,13 +45,13 @@ export default function UsersPage() {
   const [editPassword, setEditPassword] = useState("");
 
   const roleOptions: Role[] = currentUser?.role === "owner"
-    ? ["owner", "admin", "accountant", "employee"]
-    : ["admin", "accountant", "employee"];
+    ? [...ROLES]
+    : ROLES.filter(role => role !== "owner");
 
   const handleAdd = () => {
     if (!newName.trim()) return toast.error("يرجى إدخال الاسم");
     if (!newUsername.trim()) return toast.error("يرجى إدخال اسم المستخدم");
-    if (newPassword.length < 4) return toast.error("كلمة المرور يجب أن تكون 4 أحرف على الأقل");
+    if (newPassword.length < 12) return toast.error("كلمة المرور يجب أن تكون 12 محرفًا على الأقل");
     if (newRole === "employee" && !newEmployeeId) return toast.error("يرجى اختيار الموظف المرتبط بالحساب");
     createMut.mutate({
       name: newName.trim(), username: newUsername.trim(), password: newPassword, role: newRole,
@@ -73,7 +67,10 @@ export default function UsersPage() {
     const data: any = { id: editUser.id, employeeId: editRole === "employee" ? Number(editEmployeeId) : null };
     if (editName.trim() && editName !== editUser.name) data.name = editName.trim();
     if (editRole !== editUser.role) data.role = editRole;
-    if (editPassword.trim()) data.password = editPassword;
+    if (editPassword.trim()) {
+      if (editPassword.length < 12) return toast.error("كلمة المرور يجب أن تكون 12 محرفًا على الأقل");
+      data.password = editPassword;
+    }
     updateMut.mutate(data, { onSuccess: () => { setShowEdit(false); setEditUser(null); setEditPassword(""); } });
   };
 

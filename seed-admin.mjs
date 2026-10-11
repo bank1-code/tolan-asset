@@ -1,41 +1,15 @@
-import { drizzle } from "drizzle-orm/mysql2";
-import { eq } from "drizzle-orm";
-import bcrypt from "bcryptjs";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const db = drizzle(process.env.DATABASE_URL);
-
-async function seedAdmin() {
-  try {
-    // Check if admin exists
-    const [existing] = await db.execute(
-      `SELECT id FROM users WHERE username = 'admin' LIMIT 1`
-    );
-    
-    if (existing && Array.isArray(existing) && existing.length > 0) {
-      console.log("Admin user already exists, updating password...");
-      const hash = await bcrypt.hash("ADMIN1", 10);
-      await db.execute(
-        `UPDATE users SET passwordHash = '${hash}', role = 'admin', name = 'سوبر أدمن', loginMethod = 'local' WHERE username = 'admin'`
-      );
-      console.log("Admin password updated successfully!");
-    } else {
-      console.log("Creating admin user...");
-      const hash = await bcrypt.hash("ADMIN1", 10);
-      const openId = `local_admin_${Date.now()}`;
-      await db.execute(
-        `INSERT INTO users (openId, username, passwordHash, name, role, loginMethod, lastSignedIn) VALUES ('${openId}', 'admin', '${hash}', 'سوبر أدمن', 'admin', 'local', NOW())`
-      );
-      console.log("Admin user created successfully!");
-    }
-    
-    process.exit(0);
-  } catch (error) {
-    console.error("Error:", error);
-    process.exit(1);
-  }
-}
-
-seedAdmin();
+import 'dotenv/config';
+import mysql from 'mysql2/promise';
+import bcrypt from 'bcryptjs';
+import {randomUUID} from 'node:crypto';
+const username=process.env.INIT_ADMIN_USERNAME||'admin';
+const password=process.env.INIT_ADMIN_PASSWORD;
+if(!process.env.DATABASE_URL||!password||password.length<12)throw new Error('Configure DATABASE_URL and a unique INIT_ADMIN_PASSWORD of at least 12 characters');
+const db=await mysql.createConnection({uri:process.env.DATABASE_URL,ssl:{minVersion:'TLSv1.2',rejectUnauthorized:true}});
+try{
+ await db.beginTransaction();
+ const[existing]=await db.query('SELECT id FROM users WHERE username=? LIMIT 1 FOR UPDATE',[username]);
+ if(existing.length)throw new Error('Existing account preserved; use authorized account management for changes');
+ await db.query("INSERT INTO users(openId,username,passwordHash,name,role,loginMethod) VALUES(?,?,?,?,'admin','local')",[randomUUID(),username,await bcrypt.hash(password,12),'مدير النظام']);
+ await db.commit();console.log('Administrator created; no credential printed.');
+}catch(error){await db.rollback();throw error;}finally{await db.end();}

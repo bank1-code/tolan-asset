@@ -1,8 +1,9 @@
+import { remainingQuantity } from "../../shared/inventoryQuantity";
 /**
  * Operations Router - النقل والاستبعاد وبراءة الذمة
  */
 import { z } from "zod";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, asc, desc, sql, inArray } from "drizzle-orm";
 import { operatorProcedure, deleteProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
@@ -17,10 +18,15 @@ import {
   exclusionTypes,
   clearanceRecords,
   exclusionSequence,
+  exclusionDrafts,
+  exclusionAttachments,
   auditLog,
 } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
 import { TRPCError } from "@trpc/server";
+import { isStoredImageUrl } from "../../shared/imageUrls";
+import { historyAudit } from "../history";
+import { operationalFinanceLock, protectFinancialHistory } from "../financialOperationalGuard";
 
 
 async function resolveTransferDestination(db: any, employeeId: number, locationId: number, departmentId: number) {
@@ -34,13 +40,14 @@ async function resolveTransferDestination(db: any, employeeId: number, locationI
     branchId: departments.branchId,
     branchName: branches.name,
     locationId: branches.locationId,
+    locationRecordId: locations.id,
     locationName: locations.name,
   }).from(departments)
     .leftJoin(branches, eq(departments.branchId, branches.id))
     .leftJoin(locations, eq(branches.locationId, locations.id))
     .where(eq(departments.id, departmentId)).limit(1);
   if (!department) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم الجديد غير موجود" });
-  if (department.locationId !== locationId) {
+  if (department.locationId !== locationId || department.locationRecordId !== locationId) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "القسم الجديد لا يتبع الموقع الجديد المختار" });
   }
   return {
@@ -55,318 +62,274 @@ async function resolveTransferDestination(db: any, employeeId: number, locationI
 // =============================================
 // النقل
 // =============================================
+const transferSnapshotSchema = z.object({
+  entityName: z.string(), entityCode: z.string().nullable(),
+  fromEmployeeName: z.string(), toEmployeeName: z.string(),
+});
+function transferSnapshot(data: unknown) {
+  const result = transferSnapshotSchema.safeParse((data as { transferSnapshot?: unknown } | null)?.transferSnapshot);
+  return result.success ? result.data : null;
+}
+
+const transferInput = z.object({
+  entityType: z.enum(["asset", "custody"]),
+  entityId: z.number().int().nonnegative().optional(),
+  movementType: z.enum(["total", "partial"]),
+  fromEmployeeId: z.number().int().positive().nullable(),
+  toEmployeeId: z.number().int().positive(),
+  toDepartmentId: z.number().int().positive(),
+  toLocationId: z.number().int().positive(),
+  notes: z.string().max(5000).optional().nullable(),
+  // The existing individual workflow transfers the selected record's entire
+  // remaining quantity; it does not split records or process an item basket.
+  items: z.array(z.unknown()).max(0, "استخدم نقل السجل المحدد؛ سلة النقل غير مدعومة").optional(),
+}).superRefine((input, ctx) => {
+  if (input.movementType === "partial" && !input.entityId) ctx.addIssue({ code: "custom", path: ["entityId"], message: "حدد الأصل أو العهدة" });
+  if (input.movementType === "total" && !input.fromEmployeeId) ctx.addIssue({ code: "custom", path: ["fromEmployeeId"], message: "حدد الموظف المصدر للنقل الكلي" });
+});
+
 const transfersRouter = router({
   list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    return db.select().from(assetTransfers).orderBy(desc(assetTransfers.createdAt));
+    const rows = await db.select({ transfer: assetTransfers, auditData: auditLog.newData }).from(assetTransfers)
+      .leftJoin(auditLog, and(eq(auditLog.tableName, "asset_transfers"), eq(auditLog.recordId, assetTransfers.id), eq(auditLog.actionType, "TRANSFER")))
+      .orderBy(desc(assetTransfers.createdAt));
+    return rows.map(({ transfer, auditData }) => ({ ...transfer, ...transferSnapshot(auditData), historicalSnapshot: Boolean(transferSnapshot(auditData)) }));
   }),
-
-  getById: operatorProcedure
-    .input(z.object({ id: z.number() }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [transfer] = await db.select().from(assetTransfers).where(eq(assetTransfers.id, input.id)).limit(1);
-      if (!transfer) throw new TRPCError({ code: "NOT_FOUND" });
-      let entityName = "";
-      if (transfer.entityType === "asset") {
-        const [a] = await db.select({ name: assets.assetName }).from(assets).where(eq(assets.id, transfer.entityId)).limit(1);
-        entityName = a?.name || "";
-      } else {
-        const [c] = await db.select({ name: custodyItems.name }).from(custodyItems).where(eq(custodyItems.id, transfer.entityId)).limit(1);
-        entityName = c?.name || "";
-      }
-      let fromEmployeeName = "";
-      let toEmployeeName = "";
-      if (transfer.fromEmployeeId) {
-        const fromId = transfer.fromEmployeeId;
-        const [e] = await db.select({ fullName: employees.fullName }).from(employees).where(eq(employees.id, fromId)).limit(1);
-        fromEmployeeName = e?.fullName || "";
-      }
-      const toEmpId = transfer.toEmployeeId;
-      const [toEmp] = toEmpId ? await db.select({ fullName: employees.fullName }).from(employees).where(eq(employees.id, toEmpId)).limit(1) : [undefined];
-      toEmployeeName = toEmp?.fullName || "";
-      return { ...transfer, entityName, fromEmployeeName, toEmployeeName };
-    }),
-
-  update: operatorProcedure
-    .input(z.object({
-      id: z.number(),
-      fromEmployeeId: z.number().optional().nullable(),
-      toEmployeeId: z.number(),
-      notes: z.string().optional().nullable(),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.update(assetTransfers).set({
-        fromEmployeeId: input.fromEmployeeId || null,
-        toEmployeeId: input.toEmployeeId,
-        notes: input.notes || null,
-      }).where(eq(assetTransfers.id, input.id));
-      await logAuditAction({
-        tableName: "asset_transfers",
-        recordId: input.id,
-        actionType: "UPDATE",
-        actionDescription: `تعديل عملية نقل #${input.id}`,
-        newData: input,
-        performedBy: ctx.user.id,
-        performedByName: ctx.user.name || undefined,
-        ipAddress: ctx.req.ip || undefined,
-        userAgent: ctx.req.headers["user-agent"] || undefined,
-      });
-      return { success: true };
-    }),
-
-  create: operatorProcedure
-    .input(z.object({
-      entityType: z.enum(["asset", "custody"]),
-      entityId: z.number(),
-      movementType: z.enum(["total", "partial"]),
-      fromEmployeeId: z.number().optional().nullable(),
-      toEmployeeId: z.number(),
-      toDepartmentId: z.number(),
-      toLocationId: z.number(),
-      fromDepartment: z.string().optional().nullable(),
-      toDepartment: z.string().optional().nullable(),
-      fromLocation: z.string().optional().nullable(),
-      toLocation: z.string().optional().nullable(),
-      quantity: z.number().min(1).default(1),
-      assetValue: z.string().optional().nullable(),
-      notes: z.string().optional().nullable(),
-      // For partial transfer - items to transfer
-      items: z.array(z.object({
-        entityType: z.enum(["asset", "custody"]),
-        entityId: z.number(),
-        quantity: z.number().min(1),
-      })).optional(),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const destination = await resolveTransferDestination(db, input.toEmployeeId, input.toLocationId, input.toDepartmentId);
-
+  getById: operatorProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [transfer] = await db.select().from(assetTransfers).where(eq(assetTransfers.id, input.id)).limit(1);
+    if (!transfer) throw new TRPCError({ code: "NOT_FOUND" });
+    const [log] = await db.select({ data: auditLog.newData }).from(auditLog)
+      .where(and(eq(auditLog.tableName, "asset_transfers"), eq(auditLog.recordId, transfer.id), eq(auditLog.actionType, "TRANSFER"))).limit(1);
+    const snapshot = transferSnapshot(log?.data);
+    if (snapshot) return { ...transfer, ...snapshot, historicalSnapshot: true };
+    // Older records have no saved name snapshot. Keep them readable, clearly
+    // distinguishing current lookup values from historical evidence.
+    const table = transfer.entityType === "asset" ? assets : custodyItems;
+    const [entity] = await db.select().from(table).where(eq(table.id, transfer.entityId)).limit(1);
+    const [source] = transfer.fromEmployeeId ? await db.select().from(employees).where(eq(employees.id, transfer.fromEmployeeId)).limit(1) : [];
+    const [target] = transfer.toEmployeeId ? await db.select().from(employees).where(eq(employees.id, transfer.toEmployeeId)).limit(1) : [];
+    return { ...transfer, entityName: entity ? (transfer.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetName : (entity as typeof custodyItems.$inferSelect).name) : "",
+      entityCode: entity ? (transfer.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetCode : (entity as typeof custodyItems.$inferSelect).code) : null,
+      fromEmployeeName: source?.fullName || "غير محدد", toEmployeeName: target?.fullName || "غير محدد", historicalSnapshot: false };
+  }),
+  // Reject older clients explicitly as well as removing editing from the UI.
+  update: operatorProcedure.input(z.object({ id: z.number().int().positive() })).mutation(() => {
+    throw new TRPCError({ code: "FORBIDDEN", message: "حركة النقل منفذة وتاريخية؛ لا يمكن تعديلها مباشرة" });
+  }),
+  create: operatorProcedure.input(transferInput).mutation(async ({ input, ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return db.transaction(async tx => {
+      await operationalFinanceLock(tx);
+      const destination = await resolveTransferDestination(tx, input.toEmployeeId, input.toLocationId, input.toDepartmentId);
+      const [targetEmployee] = await tx.select().from(employees).where(eq(employees.id, destination.employeeId)).limit(1);
+      if (!targetEmployee) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المستلم غير موجود" });
+      const table = input.entityType === "asset" ? assets : custodyItems;
+      let selected;
       if (input.movementType === "total") {
-        // نقل كلي - نقل جميع عناصر الموظف
-        const table = input.entityType === "asset" ? assets : custodyItems;
-        const assignedToCol = input.entityType === "asset" ? assets.assignedTo : custodyItems.assignedTo;
-        let affectedEntityIds: number[] = [];
-
-        // نحفظ معرفات كل العناصر المتأثرة لضمان بقاء سجل الحركة قابلاً للتحقق لاحقاً.
-        if (input.fromEmployeeId) {
-          const affected = await db.select({ id: table.id }).from(table).where(eq(assignedToCol, input.fromEmployeeId));
-          affectedEntityIds = affected.map((row: any) => Number(row.id));
-          await db.update(table).set({
-            assignedTo: input.toEmployeeId,
-            departmentId: destination.departmentId,
-            locationId: destination.locationId,
-          }).where(eq(assignedToCol, input.fromEmployeeId));
-        }
-
-        // تسجيل النقل
-        const result = await db.insert(assetTransfers).values({
-          entityType: input.entityType,
-          entityId: input.entityId,
-          movementType: "total",
-          fromEmployeeId: input.fromEmployeeId || null,
-          toEmployeeId: input.toEmployeeId,
-          fromDepartment: input.fromDepartment || null,
-          toDepartment: destination.departmentName || input.toDepartment || null,
-          fromLocation: input.fromLocation || null,
-          toLocation: destination.locationName || input.toLocation || null,
-          quantity: input.quantity,
-          assetValue: input.assetValue || null,
-          notes: input.notes || null,
-          transferredBy: ctx.user.id,
-        });
-
-        await logAuditAction({
-          tableName: "asset_transfers",
-          recordId: Number(result[0].insertId),
-          actionType: "TRANSFER",
-          actionDescription: `نقل كلي ${input.entityType === "asset" ? "أصول" : "عهد"} من موظف #${input.fromEmployeeId} إلى موظف #${input.toEmployeeId}`,
-          newData: { ...input, affectedEntityIds },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name || undefined,
-          ipAddress: ctx.req.ip || undefined,
-          userAgent: ctx.req.headers["user-agent"] || undefined,
-        });
-
-        return { success: true, id: Number(result[0].insertId) };
+        const [sourceEmployee] = await tx.select().from(employees).where(eq(employees.id, input.fromEmployeeId!)).limit(1);
+        if (!sourceEmployee) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المصدر غير موجود" });
+        selected = await tx.select().from(table).where(and(eq(table.assignedTo, input.fromEmployeeId!), eq(table.status, "ACTIVE"), sql`${table.quantity} - COALESCE(${table.excludedQuantity}, 0) - ${table.warrantyReplacedQuantity} > 0`))
+          .orderBy(asc(table.id)).for("update");
       } else {
-        // نقل عنصر محدد: الموظف والموقع والقسم الجديد مستقلة عن القسم الوظيفي للموظف.
-        let current: any;
-        if (input.entityType === "asset") {
-          [current] = await db.select({
-            id: assets.id, name: assets.assetName, code: assets.assetCode, quantity: assets.quantity,
-            assignedTo: assets.assignedTo, departmentId: assets.departmentId, departmentName: departments.name,
-            locationId: assets.locationId, locationName: locations.name, status: assets.status,
-          }).from(assets)
-            .leftJoin(departments, eq(assets.departmentId, departments.id))
-            .leftJoin(locations, eq(assets.locationId, locations.id))
-            .where(eq(assets.id, input.entityId)).limit(1);
-        } else {
-          [current] = await db.select({
-            id: custodyItems.id, name: custodyItems.name, code: custodyItems.code, quantity: custodyItems.quantity,
-            assignedTo: custodyItems.assignedTo, departmentId: custodyItems.departmentId, departmentName: departments.name,
-            locationId: custodyItems.locationId, locationName: locations.name, status: custodyItems.status,
-          }).from(custodyItems)
-            .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
-            .leftJoin(locations, eq(custodyItems.locationId, locations.id))
-            .where(eq(custodyItems.id, input.entityId)).limit(1);
+        selected = await tx.select().from(table).where(eq(table.id, input.entityId!)).limit(1).for("update");
+        if (!selected.length) throw new TRPCError({ code: "NOT_FOUND", message: "الأصل أو العهدة غير موجودة" });
+        const current = selected[0];
+        if (input.fromEmployeeId !== undefined && (current.assignedTo || null) !== input.fromEmployeeId) {
+          throw new TRPCError({ code: "CONFLICT", message: "تغير الموظف المسؤول عن السجل؛ حدّث البيانات قبل النقل" });
         }
-
-        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "الأصل أو العهدة المحددة غير موجودة" });
-        if (current.status !== "ACTIVE") throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن نقل عنصر غير نشط" });
-
-        if (input.entityType === "asset") {
-          await db.update(assets).set({ assignedTo: input.toEmployeeId, departmentId: destination.departmentId, locationId: destination.locationId })
-            .where(eq(assets.id, input.entityId));
-        } else {
-          await db.update(custodyItems).set({ assignedTo: input.toEmployeeId, departmentId: destination.departmentId, locationId: destination.locationId })
-            .where(eq(custodyItems.id, input.entityId));
-        }
-
-        const result = await db.insert(assetTransfers).values({
-          entityType: input.entityType,
-          entityId: input.entityId,
-          movementType: "partial",
-          fromEmployeeId: current.assignedTo || null,
-          toEmployeeId: input.toEmployeeId,
-          fromDepartment: current.departmentName || null,
-          toDepartment: destination.departmentName || null,
-          fromLocation: current.locationName || null,
-          toLocation: destination.locationName || null,
-          quantity: current.quantity || 1,
-          assetValue: input.assetValue || null,
-          notes: input.notes || null,
-          transferredBy: ctx.user.id,
-        });
-
-        await logAuditAction({
-          tableName: "asset_transfers",
-          recordId: Number(result[0].insertId),
-          actionType: "TRANSFER",
-          actionDescription: `نقل ${input.entityType === "asset" ? "أصل" : "عهدة"} #${input.entityId} إلى موظف #${input.toEmployeeId}`,
-          oldData: current,
-          newData: { ...input, destination },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name || undefined,
-          ipAddress: ctx.req.ip || undefined,
-          userAgent: ctx.req.headers["user-agent"] || undefined,
-        });
-
-        return { success: true, id: Number(result[0].insertId) };
       }
-    }),
+      // Do not create a historical event for an unchanged assignment.
+      const affected = selected.filter(entity => entity.assignedTo !== destination.employeeId || entity.departmentId !== destination.departmentId || entity.locationId !== destination.locationId);
+      if (!affected.length) throw new TRPCError({ code: "BAD_REQUEST", message: "لا توجد عناصر قابلة للنقل إلى وجهة مختلفة" });
+      const affectedEntityIds = affected.map(entity => entity.id);
+      const transferIds: number[] = [];
+      let quantityMoved = 0;
+      for (const entity of affected) {
+        await protectFinancialHistory(tx,input.entityType,entity.id,new Date().toISOString().slice(0,10));
+        const excluded = entity.excludedQuantity || 0;
+        const remaining = remainingQuantity(entity);
+        if (entity.status !== "ACTIVE" || !Number.isInteger(remaining) || remaining <= 0 || excluded < 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن نقل سجل مستبعد أو غير نشط أو بدون كمية متبقية" });
+        }
+        const [sourceEmployee] = entity.assignedTo ? await tx.select().from(employees).where(eq(employees.id, entity.assignedTo)).limit(1) : [];
+        const [sourceDepartment] = entity.departmentId ? await tx.select().from(departments).where(eq(departments.id, entity.departmentId)).limit(1) : [];
+        const [sourceLocation] = entity.locationId ? await tx.select().from(locations).where(eq(locations.id, entity.locationId)).limit(1) : [];
+        const snapshot = {
+          entityName: input.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetName : (entity as typeof custodyItems.$inferSelect).name,
+          entityCode: input.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetCode : (entity as typeof custodyItems.$inferSelect).code,
+          fromEmployeeName: sourceEmployee?.fullName || "غير محدد", toEmployeeName: targetEmployee.fullName,
+        };
+        const record = {
+          entityType: input.entityType, entityId: entity.id, movementType: input.movementType,
+          fromEmployeeId: entity.assignedTo, toEmployeeId: destination.employeeId,
+          fromDepartment: sourceDepartment?.name || null, toDepartment: destination.departmentName,
+          fromLocation: sourceLocation?.name || null, toLocation: destination.locationName,
+          quantity: remaining, assetValue: entity.assetValue, notes: input.notes || null, transferredBy: ctx.user.id,
+        };
+        const inserted = await tx.insert(assetTransfers).values(record);
+        const id = Number(inserted[0].insertId);
+        await tx.update(table).set({ assignedTo: destination.employeeId, departmentId: destination.departmentId, locationId: destination.locationId }).where(eq(table.id, entity.id));
+        await historyAudit(tx, ctx, { entityType: input.entityType, entityId: entity.id, transferId: id, tableName: "asset_transfers", recordId: id, actionType: "TRANSFER",
+          actionDescription: "نقل " + (input.entityType === "asset" ? "أصل" : "عهدة") + " #" + entity.id,
+          oldData: entity, newData: { ...record, destination, affectedEntityIds, transferSnapshot: snapshot },
+          changedFields: [
+            ...(entity.assignedTo !== destination.employeeId ? ["assignedTo"] : []),
+            ...(entity.departmentId !== destination.departmentId ? ["departmentId"] : []),
+            ...(entity.locationId !== destination.locationId ? ["locationId"] : []),
+          ],
+        });
+        transferIds.push(id); quantityMoved += remaining;
+      }
+      return { success: true, id: transferIds[0], transferIds, affectedEntityIds, count: transferIds.length, quantityMoved };
+    });
+  }),
 });
 
 // =============================================
 // الاستبعاد
 // =============================================
+const exclusionInput = z.object({
+  entityType: z.enum(["asset", "custody"]),
+  entityId: z.number().int().positive(),
+  exclusionMode: z.enum(["full", "partial"]).default("partial"),
+  exclusionTypeId: z.number().int().positive(),
+  reason: z.string().trim().min(5),
+  quantityExcluded: z.number().int().positive(),
+  effectiveDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+    const parsed = new Date(value + "T00:00:00Z");
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }, "تاريخ سريان غير صحيح"),
+  responsibleData: z.array(z.object({ job: z.string().trim().min(2), name: z.string().trim().min(3) })).min(1).max(6),
+  exclusionImages: z.array(z.string().refine(isStoredImageUrl, "رابط صورة غير صالح؛ أعد رفع الصورة من التطبيق")).max(6).default([]),
+  draftId: z.number().int().positive().optional(),
+});
+
 const exclusionsRouter = router({
+  getById: operatorProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [record] = await db.select().from(assetExclusions).where(eq(assetExclusions.id, input.id)).limit(1);
+    if (!record) throw new TRPCError({ code: "NOT_FOUND" });
+    const attachments = await db.select().from(exclusionAttachments).where(eq(exclusionAttachments.exclusionId, input.id)).orderBy(asc(exclusionAttachments.createdAt), asc(exclusionAttachments.id));
+    const audit = await db.select().from(auditLog).where(and(eq(auditLog.tableName, "asset_exclusions"), eq(auditLog.recordId, input.id))).orderBy(asc(auditLog.createdAt));
+    const attachmentAudit = attachments.length ? await db.select().from(auditLog).where(and(eq(auditLog.tableName, "exclusion_attachments"), inArray(auditLog.recordId, attachments.map(item => item.id)))) : [];
+    return { record, attachments, audit: [...audit, ...attachmentAudit].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) };
+  }),
+  addAttachment: operatorProcedure.input(z.object({ exclusionId: z.number().int().positive(), fileName: z.string().trim().min(1).max(255),
+    url: z.string().refine(isStoredImageUrl, "رابط المرفق غير صالح"), contentType: z.enum(["image/webp", "application/pdf"]) })).mutation(async ({ input, ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return db.transaction(async tx => {
+      const [record] = await tx.select().from(assetExclusions).where(eq(assetExclusions.id, input.exclusionId)).limit(1).for("update");
+      if (!record) throw new TRPCError({ code: "NOT_FOUND" });
+      const existing = await tx.select().from(exclusionAttachments).where(eq(exclusionAttachments.exclusionId, record.id));
+      if (existing.some(item => item.url === input.url)) throw new TRPCError({ code: "CONFLICT", message: "المرفق مرتبط بالعملية بالفعل" });
+      const data = { ...input, createdBy: ctx.user.id, createdByName: ctx.user.name };
+      const inserted = await tx.insert(exclusionAttachments).values(data);
+      const id = Number(inserted[0].insertId);
+      await historyAudit(tx, ctx, { entityType: record.entityType as "asset" | "custody", entityId: record.entityId, exclusionId: record.id,
+        tableName: "exclusion_attachments", recordId: id, actionType: "ATTACH", actionDescription: `إضافة مرفق للاستبعاد ${record.exclusionCode}`,
+        newData: { ...data, entityType: record.entityType, entityId: record.entityId, entityName: record.entityName, exclusionCode: record.exclusionCode } });
+      return { id };
+    });
+  }),
   list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select().from(assetExclusions).orderBy(desc(assetExclusions.createdAt));
   }),
-
-  getNextCode: operatorProcedure.query(async () => {
+  drafts: operatorProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const year = new Date().getFullYear();
-    const [existing] = await db.select().from(exclusionSequence).where(eq(exclusionSequence.year, year)).limit(1);
-    const nextSeq = existing ? existing.seq + 1 : 1;
-    return { code: `EXC-${year}-${String(nextSeq).padStart(4, "0")}`, seq: nextSeq };
+    return db.select().from(exclusionDrafts).where(eq(exclusionDrafts.createdBy, ctx.user.id)).orderBy(desc(exclusionDrafts.updatedAt));
   }),
-
-  create: operatorProcedure
-    .input(z.object({
-      entityType: z.enum(["asset", "custody"]),
-      entityId: z.number(),
-      exclusionCode: z.string(),
-      exclusionMode: z.enum(["full", "partial"]),
-      exclusionTypeId: z.number().optional().nullable(),
-      reason: z.string().min(1),
-      quantityBefore: z.number().optional(),
-      quantityExcluded: z.number().min(1).default(1),
-      quantityRemaining: z.number().optional(),
-      oldEmployeeName: z.string().optional().nullable(),
-      oldDepartmentName: z.string().optional().nullable(),
-      oldLocationName: z.string().optional().nullable(),
-      responsibleData: z.any().optional(),
-      exclusionImages: z.any().optional(),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      // تحديث تسلسل الاستبعاد
-      const year = new Date().getFullYear();
-      const [existing] = await db.select().from(exclusionSequence).where(eq(exclusionSequence.year, year)).limit(1);
-      if (existing) {
-        await db.update(exclusionSequence).set({ seq: existing.seq + 1 }).where(eq(exclusionSequence.id, existing.id));
-      } else {
-        await db.insert(exclusionSequence).values({ year, seq: 1 });
+  saveDraft: operatorProcedure.input(exclusionInput).mutation(async ({ input, ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return db.transaction(async tx => {
+      if (input.draftId) {
+        const [draft] = await tx.select().from(exclusionDrafts).where(and(eq(exclusionDrafts.id, input.draftId), eq(exclusionDrafts.createdBy, ctx.user.id))).for("update");
+        if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "المسودة غير موجودة أو سبق تنفيذها" });
+        await tx.update(exclusionDrafts).set({ payload: input }).where(eq(exclusionDrafts.id, draft.id));
+        return { id: draft.id };
       }
-
-      // تحديث الكمية المستبعدة في الأصل/العهدة
+      const result = await tx.insert(exclusionDrafts).values({ createdBy: ctx.user.id, payload: input });
+      return { id: Number(result[0].insertId) };
+    });
+  }),
+  deleteDraft: operatorProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.delete(exclusionDrafts).where(and(eq(exclusionDrafts.id, input.id), eq(exclusionDrafts.createdBy, ctx.user.id)));
+    return { success: true };
+  }),
+  create: operatorProcedure.input(exclusionInput).mutation(async ({ input, ctx }) => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh" }).format(new Date());
+    if (input.effectiveDate > today) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن تنفيذ استبعاد بتاريخ سريان مستقبلي؛ احفظه كمسودة حتى تاريخ السريان" });
+    }
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return db.transaction(async tx => {
+      await operationalFinanceLock(tx);
+      await protectFinancialHistory(tx,input.entityType,input.entityId,input.effectiveDate);
+      if (!input.draftId) throw new TRPCError({ code: "BAD_REQUEST", message: "احفظ المسودة قبل التنفيذ" });
+      const [draft] = await tx.select().from(exclusionDrafts).where(and(eq(exclusionDrafts.id, input.draftId), eq(exclusionDrafts.createdBy, ctx.user.id))).for("update");
+      if (!draft) throw new TRPCError({ code: "CONFLICT", message: "المسودة غير موجودة أو سبق تنفيذها" });
+      const saved = exclusionInput.parse(draft.payload);
+      if (JSON.stringify({ ...saved, draftId: input.draftId }) !== JSON.stringify(input)) {
+        throw new TRPCError({ code: "CONFLICT", message: "تغيرت المسودة؛ احفظ التعديلات قبل التنفيذ" });
+      }
       const table = input.entityType === "asset" ? assets : custodyItems;
-      const [entity] = await db.select().from(table).where(eq(table.id, input.entityId)).limit(1);
+      const [entity] = await tx.select().from(table).where(eq(table.id, input.entityId)).limit(1).for("update");
       if (!entity) throw new TRPCError({ code: "NOT_FOUND" });
-
-      if (input.exclusionMode === "full") {
-        await db.update(table).set({
-          status: "EXCLUDED",
-          excludedQuantity: entity.quantity,
-          exclusionDate: new Date(),
-          excludedBy: ctx.user.name || "النظام",
-        }).where(eq(table.id, input.entityId));
-      } else {
-        const newExcluded = (entity.excludedQuantity || 0) + input.quantityExcluded;
-        const remaining = entity.quantity - newExcluded;
-        await db.update(table).set({
-          excludedQuantity: newExcluded,
-          status: remaining <= 0 ? "EXCLUDED" : "ACTIVE",
-          exclusionDate: new Date(),
-          excludedBy: ctx.user.name || "النظام",
-        }).where(eq(table.id, input.entityId));
-      }
-
-      // إنشاء سجل الاستبعاد
-      const result = await db.insert(assetExclusions).values({
-        entityType: input.entityType,
-        entityId: input.entityId,
-        exclusionCode: input.exclusionCode,
-        exclusionMode: input.exclusionMode,
-        exclusionTypeId: input.exclusionTypeId || null,
-        reason: input.reason,
-        quantityBefore: input.quantityBefore ?? entity.quantity,
-        quantityExcluded: input.quantityExcluded,
-        quantityRemaining: input.quantityRemaining ?? (entity.quantity - input.quantityExcluded),
-        oldEmployeeName: input.oldEmployeeName || null,
-        oldDepartmentName: input.oldDepartmentName || null,
-        oldLocationName: input.oldLocationName || null,
-        responsibleData: input.responsibleData || null,
-        exclusionImages: input.exclusionImages || null,
-        excludedBy: ctx.user.id,
+      const before = remainingQuantity(entity);
+      if (!Number.isInteger(entity.quantity) || entity.quantity <= 0 || !Number.isInteger(entity.excludedQuantity || 0) || (entity.excludedQuantity || 0) < 0 || before < 0)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "كميات السجل غير صالحة؛ راجع بياناته قبل الاستبعاد" });
+      if (entity.status !== "ACTIVE" || before <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "الاستبعاد متاح للسجلات النشطة ذات الكمية المتبقية فقط" });
+      const qty = input.quantityExcluded;
+      if (qty > before) throw new TRPCError({ code: "BAD_REQUEST", message: "الكمية المطلوبة تتجاوز المتبقي الفعلي (" + before + ")" });
+      const [type] = await tx.select().from(exclusionTypes).where(eq(exclusionTypes.id, input.exclusionTypeId));
+      if (!type) throw new TRPCError({ code: "BAD_REQUEST", message: "نوع الاستبعاد غير موجود" });
+      const year = Number(new Intl.DateTimeFormat("en", { timeZone: "Asia/Riyadh", year: "numeric" }).format(new Date()));
+      await tx.insert(exclusionSequence).values({ year, seq: 1 }).onDuplicateKeyUpdate({ set: { seq: sql`seq + 1` } });
+      const [sequence] = await tx.select().from(exclusionSequence).where(eq(exclusionSequence.year, year)).for("update");
+      const code = "EXC-" + year + "-" + String(sequence.seq).padStart(4, "0");
+      const remaining = before - qty;
+      const name = input.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetName : (entity as typeof custodyItems.$inferSelect).name;
+      const entityCode = input.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetCode : (entity as typeof custodyItems.$inferSelect).code;
+      const [employee] = entity.assignedTo ? await tx.select().from(employees).where(eq(employees.id, entity.assignedTo)) : [];
+      const [department] = entity.departmentId ? await tx.select().from(departments).where(eq(departments.id, entity.departmentId)) : [];
+      const [location] = entity.locationId ? await tx.select().from(locations).where(eq(locations.id, entity.locationId)) : [];
+      const record = {
+        entityType: input.entityType, entityId: entity.id, entityName: name, entityCode,
+        exclusionCode: code, exclusionMode: remaining === 0 ? "full" : "partial", exclusionTypeId: input.exclusionTypeId,
+        originalUnitValue: entity.assetValue, entitySnapshot: { ...entity, entityName: name, entityCode, exclusionTypeName: type.name,
+          employeeName: employee?.fullName ?? null, departmentName: department?.name ?? null, locationName: location?.name ?? null,
+          executedByName: ctx.user.name },
+        reason: input.reason, originalQuantity: entity.quantity, previouslyExcluded: entity.excludedQuantity || 0,
+        quantityBefore: before, quantityExcluded: qty, quantityRemaining: remaining,
+        effectiveDate: input.effectiveDate, exclusionDate: new Date(), oldEmployeeName: employee?.fullName || null,
+        oldDepartmentName: department?.name || null, oldLocationName: location?.name || null,
+        responsibleData: input.responsibleData, exclusionImages: input.exclusionImages, excludedBy: ctx.user.id,
+      };
+      const result = await tx.insert(assetExclusions).values(record);
+      await tx.update(table).set({ excludedQuantity: (entity.excludedQuantity || 0) + qty,
+        status: remaining === 0 ? "EXCLUDED" : entity.status,
+        exclusionDate: record.exclusionDate, excludedBy: ctx.user.name || "النظام",
+      }).where(eq(table.id, entity.id));
+      await historyAudit(tx, ctx, { entityType: input.entityType, entityId: entity.id, exclusionId: Number(result[0].insertId), tableName: "asset_exclusions", recordId: Number(result[0].insertId),
+        actionType: "EXCLUDE", actionDescription: "استبعاد " + code, oldData: entity, newData: record,
       });
-
-      await logAuditAction({
-        tableName: "asset_exclusions",
-        recordId: Number(result[0].insertId),
-        actionType: "EXCLUDE",
-        actionDescription: `استبعاد ${input.exclusionMode === "full" ? "كلي" : "جزئي"} - ${input.entityType === "asset" ? "أصل" : "عهدة"} #${input.entityId}: ${input.reason}`,
-        newData: input,
-        performedBy: ctx.user.id,
-        performedByName: ctx.user.name || undefined,
-        ipAddress: ctx.req.ip || undefined,
-        userAgent: ctx.req.headers["user-agent"] || undefined,
-      });
-
-      return { success: true, id: Number(result[0].insertId) };
-    }),
+      await tx.delete(exclusionDrafts).where(eq(exclusionDrafts.id, input.draftId));
+      return { success: true, id: Number(result[0].insertId), record };
+    });
+  }),
 });
 
 // =============================================
@@ -458,7 +421,7 @@ const clearanceRouter = router({
         })
         .from(assets)
         .leftJoin(departments, eq(assets.departmentId, departments.id))
-        .where(eq(assets.assignedTo, record.employeeId));
+        .where(and(eq(assets.assignedTo, record.employeeId), sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`));
 
       const employeeCustody = await db
         .select({
@@ -470,7 +433,7 @@ const clearanceRouter = router({
         })
         .from(custodyItems)
         .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
-        .where(eq(custodyItems.assignedTo, record.employeeId));
+        .where(and(eq(custodyItems.assignedTo, record.employeeId), sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`));
 
       return { 
         record, 
@@ -492,7 +455,7 @@ const clearanceRouter = router({
           id: assets.id,
           name: assets.assetName,
           code: assets.assetCode,
-          quantity: assets.quantity,
+          quantity: sql<number>`${assets.quantity} - COALESCE(${assets.excludedQuantity}, 0) - ${assets.warrantyReplacedQuantity}`,
           value: assets.assetValue,
           type: sql<string>`'asset'`,
           departmentName: departments.name,
@@ -508,7 +471,7 @@ const clearanceRouter = router({
           id: custodyItems.id,
           name: custodyItems.name,
           code: custodyItems.code,
-          quantity: custodyItems.quantity,
+          quantity: sql<number>`${custodyItems.quantity} - COALESCE(${custodyItems.excludedQuantity}, 0) - ${custodyItems.warrantyReplacedQuantity}`,
           value: custodyItems.assetValue,
           type: sql<string>`'custody'`,
           departmentName: departments.name,

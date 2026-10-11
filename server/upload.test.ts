@@ -1,7 +1,14 @@
+
+import {legacyFixture} from './test-utils/legacyFixture';
+const isolated=vi.hoisted(()=>({db:null}));
+vi.mock('./db',()=>({getDb:async()=>isolated.db}));
+vi.mock('./security',()=>({logAuditAction:vi.fn(),clearBruteForceBlock:vi.fn()}));
+vi.mock('./storage',()=>({storagePut:vi.fn(async()=>({url:'/api/files/test/backup.tln'}))}));
+beforeEach(()=>{isolated.db=legacyFixture();});
 /**
  * اختبارات نظام رفع الصور (Upload Router)
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import type { User } from "../drizzle/schema";
@@ -148,130 +155,12 @@ describe("upload", () => {
 // ==========================================
 // اختبارات حفظ روابط الصور في الأصول والعهد
 // ==========================================
-describe("inventory image paths", () => {
-  it("assets.create accepts assetImagePath and invoiceImagePath", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const result = await caller.inventory.assets.create({
-      assetName: "أصل اختبار صور",
-      assetCode: `AST-IMG-${Date.now()}`,
-      quantity: 1,
-      assetValue: "100",
-      condition: "جيد جدًا",
-      assignedTo: null,
-      departmentId: null,
-      locationId: null,
-      notes: null,
-      assetImagePath: "https://example.com/test-asset.webp",
-      invoiceImagePath: "https://example.com/test-invoice.webp",
-    });
-
-    expect(result).toBeDefined();
-    expect(result.id).toBeGreaterThan(0);
-  });
-
-  it("assets.list returns image paths", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const list = await caller.inventory.assets.list({});
-    expect(Array.isArray(list)).toBe(true);
-
-    // Find the asset we just created
-    const testAsset = list.find((a: any) => a.assetName === "أصل اختبار صور");
-    if (testAsset) {
-      expect(testAsset.assetImagePath).toBe("https://example.com/test-asset.webp");
-      expect(testAsset.invoiceImagePath).toBe("https://example.com/test-invoice.webp");
-    }
-  });
-
-  it("assets.getById returns image paths", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const list = await caller.inventory.assets.list({});
-    const testAsset = list.find((a: any) => a.assetName === "أصل اختبار صور");
-    if (testAsset) {
-      const detail = await caller.inventory.assets.getById({ id: testAsset.id });
-      expect(detail).toBeDefined();
-      expect(detail!.assetImagePath).toBe("https://example.com/test-asset.webp");
-      expect(detail!.invoiceImagePath).toBe("https://example.com/test-invoice.webp");
-    }
-  });
-
-  it("assets.update can update image paths", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const list = await caller.inventory.assets.list({});
-    const testAsset = list.find((a: any) => a.assetName === "أصل اختبار صور");
-    if (testAsset) {
-      await caller.inventory.assets.update({
-        id: testAsset.id,
-        assetName: "أصل اختبار صور محدث",
-        assetImagePath: "https://example.com/updated-asset.webp",
-        invoiceImagePath: null,
-      });
-
-      const updated = await caller.inventory.assets.getById({ id: testAsset.id });
-      expect(updated!.assetImagePath).toBe("https://example.com/updated-asset.webp");
-    }
-  });
-
-  it("custody.create accepts assetImagePath and invoiceImagePath", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const result = await caller.inventory.custody.create({
-      name: "عهدة اختبار صور",
-      code: `CUS-IMG-${Date.now()}`,
-      quantity: 1,
-      assetValue: "200",
-      condition: "جيد",
-      assignedTo: null,
-      departmentId: null,
-      locationId: null,
-      notes: null,
-      assetImagePath: "https://example.com/test-custody.webp",
-      invoiceImagePath: "https://example.com/test-custody-invoice.webp",
-    });
-
-    expect(result).toBeDefined();
-    expect(result.id).toBeGreaterThan(0);
-  });
-
-  it("custody.list returns image paths", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const list = await caller.inventory.custody.list({});
-    expect(Array.isArray(list)).toBe(true);
-
-    const testCustody = list.find((c: any) => c.name === "عهدة اختبار صور");
-    if (testCustody) {
-      expect(testCustody.assetImagePath).toBe("https://example.com/test-custody.webp");
-      expect(testCustody.invoiceImagePath).toBe("https://example.com/test-custody-invoice.webp");
-    }
-  });
-
-  // Clean up test data
-  it("cleanup: delete test assets and custody items", async () => {
-    const ctx = createMockContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const assetsList = await caller.inventory.assets.list({});
-    for (const a of assetsList) {
-      if ((a as any).assetName?.includes("اختبار صور")) {
-        await caller.inventory.assets.delete({ id: a.id });
-      }
-    }
-
-    const custodyList = await caller.inventory.custody.list({});
-    for (const c of custodyList) {
-      if ((c as any).name?.includes("اختبار صور")) {
-        await caller.inventory.custody.delete({ id: c.id });
-      }
-    }
-  });
+describe('inventory image paths',()=>{
+ for(const kind of ['assets','custody']){
+  const input=()=>({...kind==='assets'?{assetName:'أصل اختبار صور'}:{name:'عهدة اختبار صور'},quantity:1,assetValue:'100',assignedTo:1,departmentId:1,locationId:1,assetImagePath:'https://example.com/test.webp',invoiceImagePath:'https://example.com/invoice.webp'});
+  const caller=()=>appRouter.createCaller(createMockContext()).inventory[kind];
+  it(kind+' preserves images when saving and loading a draft',async()=>{const api=caller(),r=await api.create(input());expect(r.status).toBe('DRAFT');const saved=await api.getById({id:r.id});expect(saved.assetImagePath).toBe(input().assetImagePath);expect(saved.invoiceImagePath).toBe(input().invoiceImagePath);const list=await api.list({});expect(list.some(x=>x.id===r.id)).toBe(true);});
+  it(kind+' edits draft images repeatedly with version checks',async()=>{const api=caller(),r=await api.create(input());await api.update({...input(),id:r.id,expectedVersion:0,assetImagePath:'https://example.com/new.webp',invoiceImagePath:null});const detail=await api.getById({id:r.id});expect(detail.assetImagePath).toBe('https://example.com/new.webp');expect(detail.invoiceImagePath).toBeNull();await expect(api.update({...input(),id:r.id,expectedVersion:0,assetImagePath:null})).rejects.toMatchObject({code:'CONFLICT'});});
+  it(kind+' denies physical deletion and cancels its draft',async()=>{const api=caller(),r=await api.create(input());await expect(api.delete({id:r.id})).rejects.toMatchObject({code:'FORBIDDEN'});await api.cancelDraft({id:r.id,expectedVersion:0});expect((await api.getById({id:r.id})).status).toBe('CANCELLED');});
+ }
 });

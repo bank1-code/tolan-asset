@@ -1,10 +1,15 @@
+import { escapeHtml } from "@shared/html";
+import { canApprove as hasApprovalRole, canOperate as hasOperatorRole } from "@shared/roles";
+import { remainingQuantity } from "@shared/inventoryQuantity";
 /*
  * Design: Calm Luxury - إدارة العهد
  * مربوطة بالـ API الحقيقي عبر tRPC
  */
+import { openArchiveReport } from "@/lib/archiveReport";
 import DashboardLayout from "@/components/DashboardLayout";
 import DataTable from "@/components/DataTable";
 import StatusBadge from "@/components/StatusBadge";
+import { InventoryApprovalDialog } from "@/components/InventoryApprovalDialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,7 +43,7 @@ import {
   X,
   ZoomIn,
 } from "lucide-react";
-import { useRef, useState, useMemo } from "react";
+import { useRef, useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { CustodyExcelButtons } from "@/components/ExcelButtons";
@@ -46,11 +51,34 @@ import { useAuth } from "@/_core/hooks/useAuth";
 
 const CUSTODY_CONDITIONS = ["جيد جدًا", "جيد", "متهالك"];
 
+function getMonthlyCodePreview(
+  prefix: string | null | undefined,
+  sequence: number | null | undefined,
+  sequencePeriod: string | null | undefined
+) {
+  if (!prefix) return null;
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh",
+    month: "2-digit",
+    year: "2-digit",
+  }).formatToParts(new Date());
+  const month = parts.find((part) => part.type === "month")?.value ?? "01";
+  const year = parts.find((part) => part.type === "year")?.value ?? "00";
+  const period = `${month}${year}`;
+  const nextSequence = sequencePeriod === period ? Number(sequence || 0) + 1 : 1;
+  const serial = String(nextSequence).padStart(2, "0");
+
+  return `${prefix}-${period}${serial}`;
+}
+
+
 interface CustodyFormData {
   name: string;
   code: string;
   quantity: string;
   asset_value: string;
+  classification_id: string;
   assigned_to: string;
   department: string;
   branch: string;
@@ -66,6 +94,7 @@ const emptyForm: CustodyFormData = {
   code: "",
   quantity: "1",
   asset_value: "",
+  classification_id: "",
   assigned_to: "",
   department: "",
   branch: "",
@@ -91,42 +120,62 @@ function fileToBase64(file: File): Promise<string> {
 export default function Custody() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
-  const canDelete = user?.role === "owner" || user?.role === "admin";
+  const canApprove = hasApprovalRole(user?.role);
+  const canOperate = hasOperatorRole(user?.role);
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterDept, setFilterDept] = useState("all");
   const [filterLocation, setFilterLocation] = useState("all");
 
+  const [tablePage, setTablePage] = useState(1);
+  const [tableSearch, setTableSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => { const timer = setTimeout(() => setDebouncedSearch(tableSearch), 300); return () => clearTimeout(timer); }, [tableSearch]);
+  useEffect(() => setTablePage(1), [filterDept, filterLocation, filterStatus, debouncedSearch]);
   const apiFilters = useMemo(() => ({
+    search: debouncedSearch || undefined,
     departmentId: filterDept !== "all" ? Number(filterDept) : undefined,
     locationId: filterLocation !== "all" ? Number(filterLocation) : undefined,
     status: filterStatus !== "all" ? filterStatus : undefined,
-  }), [filterDept, filterLocation, filterStatus]);
+  }), [filterDept, filterLocation, filterStatus, debouncedSearch]);
 
-  const { data: custodyData, isLoading } = trpc.inventory.custody.list.useQuery(apiFilters);
+  const { data: custodyData, isLoading } = trpc.inventory.custody.list.useQuery({...apiFilters, limit: 50, offset: (tablePage - 1) * 50});
+  const {data: tableTotal = 0} = trpc.inventory.custody.count.useQuery(apiFilters);
+  useEffect(() => { if (tableTotal > 0 && tablePage > Math.ceil(tableTotal / 50)) setTablePage(Math.ceil(tableTotal / 50)); }, [tableTotal, tablePage]);
   const { data: departmentsData } = trpc.settings.departments.list.useQuery();
   const { data: locationsData } = trpc.settings.locations.list.useQuery();
   const { data: branchesData } = trpc.settings.branches.list.useQuery();
+  const { data: financialClasses = [] } = trpc.depreciation.classifications.useQuery();
   const { data: employeesData } = trpc.settings.employees.list.useQuery();
 
   const utils = trpc.useUtils();
   const createCustody = trpc.inventory.custody.create.useMutation({
-    onSuccess: () => {
-      utils.inventory.custody.list.invalidate();
-      utils.records.reports.dashboard.invalidate();
+    onSuccess: async () => {
+      await Promise.all([utils.inventory.custody.invalidate(), utils.records.reports.dashboard.invalidate(), utils.settings.locations.list.invalidate()]);
     },
   });
   const updateCustody = trpc.inventory.custody.update.useMutation({
-    onSuccess: () => {
-      utils.inventory.custody.list.invalidate();
-      utils.records.reports.dashboard.invalidate();
+    onSuccess: async () => {
+      await Promise.all([utils.inventory.custody.invalidate(), utils.records.reports.dashboard.invalidate()]);
     },
   });
-  const deleteCustody = trpc.inventory.custody.delete.useMutation({
-    onSuccess: () => {
-      utils.inventory.custody.list.invalidate();
-      utils.records.reports.dashboard.invalidate();
+  const cancelCustodyDraft = trpc.inventory.custody.cancelDraft.useMutation({
+    onSuccess: async () => {
+      await Promise.all([utils.inventory.custody.invalidate(), utils.records.reports.dashboard.invalidate()]);
     },
   });
+  const approveDraft = trpc.inventory.custody.approve.useMutation();
+  const [approvalCandidate, setApprovalCandidate] = useState<any>(null);
+  const requestChanges = trpc.inventory.custody.requestChanges.useMutation();
+  const refreshDrafts = async () => { await utils.inventory.custody.invalidate(); await utils.records.reports.dashboard.invalidate(); await utils.settings.locations.list.invalidate(); setShowView(null); };
+  const handleApprove = (record: any) => setApprovalCandidate(record);
+  const confirmApproval = async () => {
+    if (!approvalCandidate || approveDraft.isPending) return;
+    try { const result = await approveDraft.mutateAsync({ id: approvalCandidate.id, expectedVersion: approvalCandidate.draftVersion }); setApprovalCandidate(null); await refreshDrafts(); toast.success(`تم الاعتماد بالرقم: ${result.code}`); } catch (error: any) { toast.error(error.message); }
+  };
+  const handleRequestChanges = async (record: any) => {
+    const note = prompt("اكتب الملاحظات المطلوبة لتصحيح المسودة:"); if (!note?.trim()) return;
+    try { await requestChanges.mutateAsync({ id: record.id, expectedVersion: record.draftVersion, note }); await refreshDrafts(); toast.success("تم حفظ ملاحظات المراجعة"); } catch (error: any) { toast.error(error.message); }
+  };
   const uploadImage = trpc.upload.image.useMutation();
 
   const items = custodyData || [];
@@ -164,48 +213,7 @@ export default function Custody() {
   const prevArchivePrintId = useRef<number | null>(null);
   if (archivePrintId !== null && archiveDocForPrint !== undefined && archivePrintId !== prevArchivePrintId.current) {
     prevArchivePrintId.current = archivePrintId;
-    const item = custodyData?.find((c: any) => c.id === archivePrintId);
-    if (item) {
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        const now = new Date().toLocaleDateString("ar-SA");
-        const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>وثيقة عهدة</title>
-          <style>
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; margin: 40px; color: #1a1a2e; }
-            .header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 3px solid #0d9488; margin-bottom: 20px; }
-            .header .date { color: #64748b; font-size: 13px; }
-            .header .doc-code { background: #f0fdfa; color: #0d9488; padding: 4px 12px; border-radius: 6px; font-weight: 700; font-size: 13px; }
-            h2 { color: #0d9488; text-align: center; margin: 16px 0; font-size: 20px; }
-            table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-            th, td { border: 1px solid #e2e8f0; padding: 10px 14px; text-align: right; font-size: 14px; }
-            th { background: #f8fafc; color: #64748b; font-weight: 700; width: 30%; }
-            td { color: #1a1a2e; }
-            .footer { text-align: center; margin-top: 30px; color: #94a3b8; font-size: 11px; }
-            @media print { body { margin: 20px; } }
-          </style></head><body>
-          <div class="header">
-            <div class="doc-code">${item.code || "-"}</div>
-            <div class="date">${now}</div>
-          </div>
-          <h2>وثيقة عهدة – من الأرشيف</h2>
-          <table>
-            <tr><th>اسم العهدة</th><td>${item.name}</td></tr>
-            <tr><th>رمز العهدة</th><td>${item.code || "-"}</td></tr>
-            <tr><th>الكمية</th><td>${item.quantity}</td></tr>
-            <tr><th>قيمة العهدة</th><td>${Number(item.assetValue || 0).toLocaleString("ar-SA")} ر.س</td></tr>
-            <tr><th>اسم المستلم</th><td>${item.employeeName || "-"}</td></tr>
-            <tr><th>القسم</th><td>${item.departmentName || "-"}</td></tr>
-            <tr><th>الموقع</th><td>${item.locationName || "-"}</td></tr>
-            <tr><th>الحالة</th><td>${item.condition || "-"}</td></tr>
-            <tr><th>ملاحظات</th><td>${item.notes || "-"}</td></tr>
-          </table>
-          <div class="footer">وثيقة من الأرشيف | تاريخ: ${now}</div>
-        </body></html>`;
-        printWindow.document.write(html);
-        printWindow.document.close();
-        setTimeout(() => printWindow.print(), 500);
-      }
-    }
+    if (archiveDocForPrint) openArchiveReport(archiveDocForPrint); else toast.warning("لا توجد وثيقة محفوظة لهذا السجل");
     setTimeout(() => setArchivePrintId(null), 100);
   }
 
@@ -213,9 +221,9 @@ export default function Custody() {
   const invoiceImageRef = useRef<HTMLInputElement>(null);
 
   const columns = [
-    { key: "code", label: "رمز العهدة", className: "font-mono text-xs font-bold text-primary" as string },
+    { key: "code", render: (record: any) => record.code || `مسودة #${record.id}`, label: "رمز العهدة", className: "font-mono text-xs font-bold text-primary" as string },
     { key: "name", label: "اسم العهدة", render: (i: any) => <span className="font-medium">{i.name}</span> },
-    { key: "quantity", label: "الكمية", className: "text-center" as string, render: (i: any) => <span className="text-center block">{i.quantity}</span> },
+    { key: "quantity", label: "الأصلية / المستبعد / المستبدل / المتبقي", className: "text-center" as string, render: (i: any) => <span className="text-center block">{i.quantity} / {i.excludedQuantity || 0} / {i.warrantyReplacedQuantity || 0} / {Math.max(0, remainingQuantity(i))}</span> },
     {
       key: "assetValue",
       label: "قيمة العهدة",
@@ -294,7 +302,10 @@ export default function Custody() {
       toast.error("اسم العهدة حقل إلزامي");
       return;
     }
-    if (!form.location || !form.department || !form.assigned_to) { toast.error("يرجى اختيار الموقع ثم القسم ثم الموظف"); return; }
+    if (!Number.isSafeInteger(Number(form.quantity)) || Number(form.quantity) < 1) {
+      toast.error("الكمية يجب أن تكون عددًا صحيحًا أكبر من صفر");
+      return;
+    }
     try {
       setIsUploading(true);
 
@@ -313,11 +324,10 @@ export default function Custody() {
         setUploadedInvoiceImageUrl(invoiceImageUrl);
       }
 
-      await createCustody.mutateAsync({
+      const created = await createCustody.mutateAsync({
         name: form.name,
-        code: form.code || null,
-        quantity: Number(form.quantity) || 1,
-        assetValue: form.asset_value || "0",
+        quantity: Number(form.quantity),
+        assetValue: form.asset_value || "0", classificationId: form.classification_id ? Number(form.classification_id) : null,
         condition: form.condition,
         assignedTo: Number(form.assigned_to),
         departmentId: Number(form.department),
@@ -330,16 +340,19 @@ export default function Custody() {
       const date = new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "2-digit", day: "2-digit" });
       setDocumentCode(code);
       setSaveDate(date);
-      setSavedData({ ...form });
+      setForm((f) => ({ ...f, code: "" }));
+      setSavedData(null);
       toast.success(
         <div className="space-y-1">
-          <p className="font-bold">تمت إضافة العهدة بنجاح</p>
-          <p className="text-xs opacity-80">الرقم الورقي: {code}</p>
+          <p className="font-bold">تم حفظ المسودة بنجاح</p>
+          <p className="text-xs opacity-80">مرجع المسودة: #{created.id} — الرقم الرسمي عند الاعتماد</p>
+
           {(custodyImageUrl || invoiceImageUrl) && (
             <p className="text-xs opacity-80">تم رفع الصور بصيغة WebP</p>
           )}
         </div>
       );
+      resetForm();
     } catch (error: any) {
       toast.error(error.message || "حدث خطأ أثناء الحفظ");
     } finally {
@@ -350,6 +363,10 @@ export default function Custody() {
   const handleUpdate = async () => {
     if (!editingItem || !form.name.trim()) {
       toast.error("اسم العهدة حقل إلزامي");
+      return;
+    }
+    if (!Number.isSafeInteger(Number(form.quantity)) || Number(form.quantity) < 1) {
+      toast.error("الكمية يجب أن تكون عددًا صحيحًا أكبر من صفر");
       return;
     }
     try {
@@ -370,13 +387,12 @@ export default function Custody() {
         setUploadedInvoiceImageUrl(invoiceImageUrl);
       }
 
-      if (!form.location || !form.department || !form.assigned_to) { toast.error("يرجى اختيار الموقع ثم القسم ثم الموظف"); return; }
       await updateCustody.mutateAsync({
-        id: editingItem.id,
+        id: editingItem.id, expectedVersion: editingItem.draftVersion,
         name: form.name,
-        code: form.code || null,
-        quantity: Number(form.quantity) || 1,
-        assetValue: form.asset_value || "0",
+        code: editingItem.code || null,
+        quantity: Number(form.quantity),
+        assetValue: form.asset_value || "0", classificationId: form.classification_id ? Number(form.classification_id) : null,
         condition: form.condition,
         assignedTo: Number(form.assigned_to),
         departmentId: Number(form.department),
@@ -385,7 +401,7 @@ export default function Custody() {
         assetImagePath: custodyImageUrl,
         invoiceImagePath: invoiceImageUrl,
       });
-      toast.success("تم تعديل العهدة بنجاح");
+      toast.success("تم تعديل المسودة بنجاح");
       resetForm();
     } catch (error: any) {
       toast.error(error.message || "حدث خطأ أثناء التعديل");
@@ -394,23 +410,25 @@ export default function Custody() {
     }
   };
 
-  const handleDelete = async (item: any) => {
-    if (!confirm(`هل أنت متأكد من حذف العهدة "${item.name}"؟`)) return;
+  const handleCancelDraft = async (item: any) => {
+    if (!confirm("إلغاء المسودة مع الاحتفاظ بسجلها؟")) return;
     try {
-      await deleteCustody.mutateAsync({ id: item.id });
-      toast.success("تم حذف العهدة بنجاح");
+      await cancelCustodyDraft.mutateAsync({ id: item.id, expectedVersion: item.draftVersion });
+      toast.success("تم إلغاء المسودة");
     } catch (error: any) {
-      toast.error(error.message || "حدث خطأ أثناء الحذف");
+      toast.error(error.message || "حدث خطأ أثناء الإلغاء");
     }
   };
 
   const startEdit = (item: any) => {
+    if (item.status !== "DRAFT" || !canOperate) { toast.error("التعديل متاح للمسودات فقط"); return; }
     setEditingItem(item);
     setForm({
       name: item.name,
       code: item.code || "",
       quantity: String(item.quantity),
       asset_value: String(item.assetValue || ""),
+      classification_id: item.classificationId ? String(item.classificationId) : "",
       assigned_to: item.assignedTo ? String(item.assignedTo) : "",
       department: item.departmentId ? String(item.departmentId) : "",
       branch: item.branchId ? String(item.branchId) : "",
@@ -439,17 +457,17 @@ export default function Custody() {
 
     // إضافة الصور في الطباعة
     const custodyImgHtml = uploadedCustodyImageUrl
-      ? `<div class="image-section"><h3>صورة العهدة</h3><img src="${uploadedCustodyImageUrl}" alt="صورة العهدة" /></div>`
+      ? `<div class="image-section"><h3>صورة العهدة</h3><img src="${escapeHtml(uploadedCustodyImageUrl)}" alt="صورة العهدة" /></div>`
       : "";
     const invoiceImgHtml = uploadedInvoiceImageUrl
-      ? `<div class="image-section"><h3>صورة الفاتورة</h3><img src="${uploadedInvoiceImageUrl}" alt="صورة الفاتورة" /></div>`
+      ? `<div class="image-section"><h3>صورة الفاتورة</h3><img src="${escapeHtml(uploadedInvoiceImageUrl)}" alt="صورة الفاتورة" /></div>`
       : "";
 
     const html = `
     <html lang="ar" dir="rtl">
     <head>
       <meta charset="utf-8">
-      <title>كشف إضافة عهدة جديدة - ${documentCode}</title>
+      <title>كشف إضافة عهدة جديدة - ${escapeHtml(documentCode)}</title>
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -475,20 +493,20 @@ export default function Custody() {
     </head>
     <body>
       <div class="header">
-        <div class="doc-code">${documentCode}</div>
-        <div class="date">${saveDate}</div>
+        <div class="doc-code">${escapeHtml(documentCode)}</div>
+        <div class="date">${escapeHtml(saveDate)}</div>
       </div>
       <h2>كشف إضافة عهدة جديدة</h2>
       <table>
-        <tr><th>اسم العهدة</th><td>${savedData.name}</td></tr>
-        <tr><th>رمز العهدة</th><td>${savedData.code}</td></tr>
-        <tr><th>الكمية</th><td>${savedData.quantity}</td></tr>
-        <tr><th>قيمة العهدة</th><td>${savedData.asset_value ? Number(savedData.asset_value).toLocaleString("ar-SA") + " ر.س" : "-"}</td></tr>
-        <tr><th>في عهدة</th><td>${empName}</td></tr>
-        <tr><th>القسم</th><td>${deptName}</td></tr>
-        <tr><th>موقع العهدة</th><td>${locName}</td></tr>
-        <tr><th>حالة العهدة</th><td>${savedData.condition}</td></tr>
-        <tr><th>ملاحظات</th><td>${savedData.notes || "-"}</td></tr>
+        <tr><th>اسم العهدة</th><td>${escapeHtml(savedData.name)}</td></tr>
+        <tr><th>رمز العهدة</th><td>${escapeHtml(savedData.code)}</td></tr>
+        <tr><th>الكمية</th><td>${escapeHtml(savedData.quantity)}</td></tr>
+        <tr><th>قيمة العهدة</th><td>${escapeHtml(savedData.asset_value ? Number(savedData.asset_value).toLocaleString("ar-SA") + " ر.س" : "-")}</td></tr>
+        <tr><th>في عهدة</th><td>${escapeHtml(empName)}</td></tr>
+        <tr><th>القسم</th><td>${escapeHtml(deptName)}</td></tr>
+        <tr><th>موقع العهدة</th><td>${escapeHtml(locName)}</td></tr>
+        <tr><th>حالة العهدة</th><td>${escapeHtml(savedData.condition)}</td></tr>
+        <tr><th>ملاحظات</th><td>${escapeHtml(savedData.notes || "-")}</td></tr>
       </table>
       ${custodyImgHtml}
       ${invoiceImgHtml}
@@ -498,7 +516,7 @@ export default function Custody() {
           <td>الإدارة العليا<div class="line"></div></td>
         </tr></table>
       </div>
-      <div class="footer">المستند رقم: ${documentCode} | تاريخ: ${saveDate}</div>
+      <div class="footer">المستند رقم: ${escapeHtml(documentCode)} | تاريخ: ${escapeHtml(saveDate)}</div>
     </body></html>`;
     printWindow.document.write(html);
     printWindow.document.close();
@@ -530,7 +548,7 @@ export default function Custody() {
   return (
     <DashboardLayout
       title="إدارة العهد"
-      subtitle={`${items.length} عهدة`}
+      subtitle={`${tableTotal} عهدة`}
       actions={
         <div className="flex items-center gap-2 w-full flex-wrap">
           <div className="flex items-center gap-2 flex-1">
@@ -543,7 +561,9 @@ export default function Custody() {
                 <SelectItem value="all">جميع الحالات</SelectItem>
                 <SelectItem value="ACTIVE">نشط</SelectItem>
                 <SelectItem value="EXCLUDED_PARTIAL">مستبعد جزئياً</SelectItem>
-                <SelectItem value="EXCLUDED_FULL">مستبعد كلياً</SelectItem>
+                <SelectItem value="REPLACED">مستبدل بالضمان</SelectItem><SelectItem value="EXCLUDED">مستبعد كلياً</SelectItem>
+                <SelectItem value="DRAFT">مسودة بانتظار الاعتماد</SelectItem>
+                <SelectItem value="CANCELLED">مسودة ملغاة</SelectItem>
               </SelectContent>
             </Select>
             <Select value={filterDept} onValueChange={setFilterDept}>
@@ -580,6 +600,8 @@ export default function Custody() {
       }
     >
       <DataTable
+        pageSize={50}
+        serverPagination={{page: tablePage, total: tableTotal, onPageChange: setTablePage, search: tableSearch, onSearchChange: (value) => {setTableSearch(value); setTablePage(1);}}}
         data={items}
         columns={columns}
         searchKeys={["name", "code", "employeeName", "departmentName", "locationName", "condition", "status", "assetValue", "notes"]}
@@ -590,17 +612,17 @@ export default function Custody() {
             <button onClick={(e) => { e.stopPropagation(); setShowView(i); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors" title="عرض">
               <Eye className="w-3.5 h-3.5 text-muted-foreground" />
             </button>
-            <button onClick={(e) => { e.stopPropagation(); startEdit(i); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors" title="تعديل">
+            {canOperate && i.status === "DRAFT" && (<button onClick={(e) => { e.stopPropagation(); startEdit(i); }} className="w-7 h-7 rounded-md hover:bg-muted flex items-center justify-center transition-colors" title="تعديل">
               <Edit className="w-3.5 h-3.5 text-muted-foreground" />
-            </button>
-            <button onClick={(e) => { e.stopPropagation(); prevArchivePrintId.current = null; setArchivePrintId(i.id); }} className="w-7 h-7 rounded-md hover:bg-teal-50 flex items-center justify-center transition-colors" title="طباعة من الأرشيف">
+            </button>)}
+            {i.status !== "DRAFT" && i.status !== "CANCELLED" && (<button onClick={(e) => { e.stopPropagation(); prevArchivePrintId.current = null; setArchivePrintId(i.id); }} className="w-7 h-7 rounded-md hover:bg-teal-50 flex items-center justify-center transition-colors" title="طباعة من الأرشيف">
               <Printer className="w-3.5 h-3.5 text-teal-600" />
-            </button>
+            </button>)}
             <button onClick={(e) => { e.stopPropagation(); setLocation(`/tracking?type=custody&id=${i.id}&name=${encodeURIComponent(i.name)}&code=${encodeURIComponent(i.code || '')}`); }} className="w-7 h-7 rounded-md hover:bg-violet-50 flex items-center justify-center transition-colors" title="عرض التتبع">
               <Activity className="w-3.5 h-3.5 text-violet-500" />
             </button>
-            {canDelete && (
-              <button onClick={(e) => { e.stopPropagation(); handleDelete(i); }} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors" title="حذف">
+            {canOperate && i.status === "DRAFT" && (
+              <button onClick={(e) => { e.stopPropagation(); handleCancelDraft(i); }} className="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center transition-colors" title="إلغاء المسودة">
                 <Trash2 className="w-3.5 h-3.5 text-red-400" />
               </button>
             )}
@@ -610,7 +632,7 @@ export default function Custody() {
 
       {/* View Dialog - مع عرض الصور */}
       <Dialog open={!!showView} onOpenChange={() => setShowView(null)}>
-        <DialogContent className="max-w-lg" dir="rtl">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
               <Eye className="w-5 h-5 text-primary" />
@@ -623,7 +645,7 @@ export default function Custody() {
                 <div className="grid grid-cols-2 gap-4">
                   <InfoField label="رمز العهدة" value={showView.code || "-"} highlight />
                   <InfoField label="اسم العهدة" value={showView.name} />
-                  <InfoField label="الكمية" value={String(showView.quantity)} />
+                  <InfoField label="الكمية الأصلية" value={String(showView.quantity)} /><InfoField label="المستبعد سابقاً" value={String(showView.excludedQuantity || 0)} /><InfoField label="المستبدل بالضمان" value={String(showView.warrantyReplacedQuantity || 0)} /><InfoField label="معرفات الوحدات" value={Array.isArray(showView.serialNumbers) ? showView.serialNumbers.join("، ") : "—"} /><InfoField label="نهاية الضمان" value={showView.warrantyEndDate || "—"} /><InfoField label="المتبقي الفعلي" value={String(Math.max(0, remainingQuantity(showView)))} />
                   <InfoField label="قيمة العهدة" value={`${Number(showView.assetValue || 0).toLocaleString("ar-SA")} ر.س`} />
                   <InfoField label="في عهدة" value={showView.employeeName || "-"} />
                   <InfoField label="القسم" value={showView.departmentName || "-"} />
@@ -637,6 +659,13 @@ export default function Custody() {
                   <StatusBadge status={showView.status} />
                 </div>
               </div>
+              {showView.status === "DRAFT" && <div className="bg-amber-50 rounded-lg p-3 space-y-2 text-sm">
+                <p>هذه مسودة؛ لا تدخل في النقل أو الاستبعاد أو الجرد حتى الاعتماد.</p>
+                {showView.reviewNote && <p>ملاحظات المختص: {showView.reviewNote}</p>}
+                {canApprove && <div className="flex gap-2"><Button onClick={() => handleApprove(showView)} disabled={approveDraft.isPending}>اعتماد وقفل البيانات</Button><Button variant="outline" onClick={() => handleRequestChanges(showView)} disabled={requestChanges.isPending}>طلب تصحيح</Button></div>}
+              </div>}
+              {showView.approvedAt && <p className="text-xs text-muted-foreground">اعتمده {showView.approvalSnapshot?.approvedByName || showView.approvedBy} بتاريخ {new Date(showView.approvedAt).toLocaleString("ar-SA")}</p>}
+              {showView.status !== "DRAFT" && showView.status !== "CANCELLED" && <p className="text-xs text-muted-foreground">البيانات مقفلة. تغيير المستلم والقسم والموقع يتم عبر النقل.</p>}
               {showView.notes && (
                 <div>
                   <span className="text-[11px] font-bold text-muted-foreground block mb-1">ملاحظات</span>
@@ -695,80 +724,125 @@ export default function Custody() {
 
       {/* Add/Edit Dialog */}
       <Dialog open={showAdd} onOpenChange={(open) => { if (!open) resetForm(); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
-          <DialogHeader>
+        <DialogContent
+          className="max-w-3xl max-h-[92vh] overflow-hidden p-0 gap-0 grid-rows-[auto_minmax(0,1fr)_auto]"
+          dir="rtl"
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
+          <DialogHeader className="border-b border-border px-6 py-5 pr-12 text-right">
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
               {editingItem ? <Edit className="w-5 h-5 text-primary" /> : <Plus className="w-5 h-5 text-primary" />}
               {editingItem ? "تعديل عهدة" : "إضافة عهدة جديدة"}
             </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              تُحفظ البيانات كمسودة قابلة للتعديل. يُولد الرقم الرسمي وتُقفل البيانات عند اعتماد المختص.
+            </p>
           </DialogHeader>
 
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-4">
-              <FormField label="اسم العهدة" required value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="أدخل اسم العهدة" />
-              <FormField label="رمز العهدة" value={form.code} onChange={(v) => setForm((f) => ({ ...f, code: v }))} placeholder="CUS-XXX" />
-              <FormField label="الكمية" value={form.quantity} onChange={(v) => setForm((f) => ({ ...f, quantity: v }))} type="number" placeholder="1" />
-              <FormField label="قيمة العهدة" value={form.asset_value} onChange={(v) => setForm((f) => ({ ...f, asset_value: v }))} type="number" placeholder="0.00" />
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">موقع العهدة <span className="text-red-500">*</span></label>
-                <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, branch: "", department: "", assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع أولاً" /></SelectTrigger>
-                  <SelectContent>
-                    {locations_.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+          <div className="min-h-0 overflow-y-auto px-6 py-5 space-y-5">
+            {/* البيانات الأساسية */}
+            <section className="rounded-xl border border-border bg-muted/10 p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">البيانات الأساسية</h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5">بيانات تعريف العهدة وقيمتها.</p>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">الفرع <span className="text-red-500">*</span></label>
-                <Select value={form.branch} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, branch: v, department: "", assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر الفرع" : "اختر الموقع أولاً"} /></SelectTrigger>
-                  <SelectContent>{formBranches.map((b: any) => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}</SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                <div className="space-y-2"><label className="text-xs font-bold">التصنيف المالي</label><select className="w-full border rounded-lg h-10 px-3 bg-background" value={form.classification_id} onChange={e => setForm(f => ({ ...f, classification_id: e.target.value }))}><option value="">غير مصنف — يحتاج تهيئة قبل الإهلاك</option>{financialClasses.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}</select></div>
+                <FormField label="اسم العهدة" required value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="أدخل اسم العهدة" />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">رمز العهدة</label>
+                  <div className="min-h-10 px-3 py-2 rounded-lg bg-background border border-dashed border-border text-sm flex items-center font-mono text-muted-foreground leading-5">
+                    {form.code
+                      ? form.code
+                      : (() => {
+                          const loc: any = locations_.find((l: any) => String(l.id) === form.location);
+                          return getMonthlyCodePreview(loc?.custodyPrefix, loc?.custodySequence, loc?.custodySequencePeriod)
+                            || "يُولد تلقائياً بعد اختيار الموقع";
+                        })()}
+                  </div>
+                  <p className="text-[10px] leading-4 text-muted-foreground">
+                    الرقم المعروض تقديري، ويُولد نهائياً عند اعتماد المسودة. ولا يتغير عند نقل العهدة لاحقاً.
+                  </p>
+                </div>
+                <FormField label="الكمية" value={form.quantity} onChange={(v) => setForm((f) => ({ ...f, quantity: v }))} type="number" placeholder="1" />
+                <FormField label="قيمة العهدة" value={form.asset_value} onChange={(v) => setForm((f) => ({ ...f, asset_value: v }))} type="number" placeholder="0.00" />
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">القسم <span className="text-red-500">*</span></label>
-                <Select value={form.department} disabled={!form.branch} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.branch ? "اختر القسم" : "اختر الفرع أولاً"} /></SelectTrigger>
-                  <SelectContent>
-                    {formDepartments.map((d) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">في عهدة <span className="text-red-500">*</span></label>
-                <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف المستلم" /></SelectTrigger>
-                  <SelectContent>
-                    {formEmployees.map((e) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">حالة العهدة</label>
-                <Select value={form.condition} onValueChange={(v) => setForm((f) => ({ ...f, condition: v }))}>
-                  <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الحالة" /></SelectTrigger>
-                  <SelectContent>
-                    {CUSTODY_CONDITIONS.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            </section>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">ملاحظات</label>
-              <textarea
-                value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                placeholder="أدخل أي ملاحظات..."
-                rows={3}
-                className="w-full px-3 py-2 rounded-lg bg-muted/40 border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all resize-none"
-              />
-            </div>
+            {/* الموقع والتخصيص */}
+            <section className="rounded-xl border border-border bg-muted/10 p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">الموقع والتخصيص</h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5">اختر الموقع ثم الفرع والقسم والموظف المستلم.</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">موقع العهدة <span className="text-red-500">*</span></label>
+                  <Select value={form.location} onValueChange={(v) => setForm((f) => ({ ...f, location: v, branch: "", department: "", assigned_to: "" }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموقع أولاً" /></SelectTrigger>
+                    <SelectContent>
+                      {locations_.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.code ? `${l.code} — ` : ""}{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">الفرع <span className="text-red-500">*</span></label>
+                  <Select value={form.branch} disabled={!form.location} onValueChange={(v) => setForm((f) => ({ ...f, branch: v, department: "", assigned_to: "" }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.location ? "اختر الفرع" : "اختر الموقع أولاً"} /></SelectTrigger>
+                    <SelectContent>{formBranches.map((b: any) => <SelectItem key={b.id} value={String(b.id)}>{b.code ? `${b.code} — ` : ""}{b.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">القسم <span className="text-red-500">*</span></label>
+                  <Select value={form.department} disabled={!form.branch} onValueChange={(v) => setForm((f) => ({ ...f, department: v, assigned_to: "" }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder={form.branch ? "اختر القسم" : "اختر الفرع أولاً"} /></SelectTrigger>
+                    <SelectContent>
+                      {formDepartments.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.code ? `${d.code} — ` : ""}{d.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">في عهدة <span className="text-red-500">*</span></label>
+                  <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف المستلم" /></SelectTrigger>
+                    <SelectContent>
+                      {formEmployees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.code ? `${e.code} — ` : ""}{e.fullName}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </section>
+
+            {/* الحالة والملاحظات */}
+            <section className="rounded-xl border border-border bg-muted/10 p-4">
+              <div className="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] gap-4 items-start">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">حالة العهدة</label>
+                  <Select value={form.condition} onValueChange={(v) => setForm((f) => ({ ...f, condition: v }))}>
+                    <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الحالة" /></SelectTrigger>
+                    <SelectContent>
+                      {CUSTODY_CONDITIONS.map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-foreground">ملاحظات</label>
+                  <textarea
+                    value={form.notes}
+                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                    placeholder="أدخل أي ملاحظات..."
+                    rows={3}
+                    className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all resize-none"
+                  />
+                </div>
+              </div>
+            </section>
 
             {/* المرفقات */}
-            <div className="border border-border rounded-xl overflow-hidden">
+            <section className="border border-border rounded-xl overflow-hidden">
               <div className="bg-muted/50 px-4 py-2.5 border-b border-border">
                 <h3 className="text-sm font-bold flex items-center gap-2">
                   <Camera className="w-4 h-4 text-primary" />
@@ -776,31 +850,22 @@ export default function Custody() {
                   <span className="text-[10px] text-muted-foreground font-normal">(يتم التحويل تلقائياً إلى WebP)</span>
                 </h3>
               </div>
-              <div className="p-4 space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      {form.custody_image ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          {form.custody_image.name}
-                        </span>
-                      ) : custodyImagePreview ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          صورة محفوظة مسبقاً
-                        </span>
-                      ) : "لم يتم إرفاق صورة العهدة"}
-                    </span>
+              <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-lg border border-border p-3 space-y-3 bg-background">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold">صورة العهدة</span>
                     {(form.custody_image || custodyImagePreview) && (
-                      <button onClick={() => { setForm((f) => ({ ...f, custody_image: null })); setCustodyImagePreview(null); setUploadedCustodyImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
+                      <button type="button" aria-label="إزالة صورة العهدة" onClick={() => { setForm((f) => ({ ...f, custody_image: null })); setCustodyImagePreview(null); setUploadedCustodyImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
                         <X className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
+                  <span className="text-[11px] text-muted-foreground block min-h-4">
+                    {form.custody_image ? form.custody_image.name : custodyImagePreview ? "صورة محفوظة مسبقاً" : "لم يتم إرفاق صورة"}
+                  </span>
                   {custodyImagePreview && (
-                    <div className="rounded-lg overflow-hidden border border-border max-w-[200px]">
-                      <img src={custodyImagePreview} alt="صورة العهدة" className="w-full h-auto" />
+                    <div className="rounded-lg overflow-hidden border border-border h-28">
+                      <img src={custodyImagePreview} alt="صورة العهدة" className="w-full h-full object-cover" />
                     </div>
                   )}
                   <Button type="button" variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => handleImageSelect("custody")}>
@@ -809,30 +874,22 @@ export default function Custody() {
                   </Button>
                   <input ref={custodyImageRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" className="hidden" onChange={(e) => handleImageChange(e, "custody")} />
                 </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      {form.invoice_image ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          {form.invoice_image.name}
-                        </span>
-                      ) : invoiceImagePreview ? (
-                        <span className="text-green-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                          صورة فاتورة محفوظة مسبقاً
-                        </span>
-                      ) : "لم يتم إرفاق صورة الفاتورة"}
-                    </span>
+
+                <div className="rounded-lg border border-border p-3 space-y-3 bg-background">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold">صورة الفاتورة</span>
                     {(form.invoice_image || invoiceImagePreview) && (
-                      <button onClick={() => { setForm((f) => ({ ...f, invoice_image: null })); setInvoiceImagePreview(null); setUploadedInvoiceImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
+                      <button type="button" aria-label="إزالة صورة الفاتورة" onClick={() => { setForm((f) => ({ ...f, invoice_image: null })); setInvoiceImagePreview(null); setUploadedInvoiceImageUrl(null); }} className="text-red-400 hover:text-red-600 transition-colors">
                         <X className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
+                  <span className="text-[11px] text-muted-foreground block min-h-4">
+                    {form.invoice_image ? form.invoice_image.name : invoiceImagePreview ? "صورة محفوظة مسبقاً" : "لم يتم إرفاق صورة"}
+                  </span>
                   {invoiceImagePreview && (
-                    <div className="rounded-lg overflow-hidden border border-border max-w-[200px]">
-                      <img src={invoiceImagePreview} alt="صورة الفاتورة" className="w-full h-auto" />
+                    <div className="rounded-lg overflow-hidden border border-border h-28">
+                      <img src={invoiceImagePreview} alt="صورة الفاتورة" className="w-full h-full object-cover" />
                     </div>
                   )}
                   <Button type="button" variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => handleImageSelect("invoice")}>
@@ -842,36 +899,25 @@ export default function Custody() {
                   <input ref={invoiceImageRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" className="hidden" onChange={(e) => handleImageChange(e, "invoice")} />
                 </div>
               </div>
-            </div>
+            </section>
+          </div>
 
-            {/* أزرار الإجراءات */}
-            <div className="flex flex-col gap-2 pt-2">
-              {editingItem ? (
-                <Button className="w-full gap-2" onClick={handleUpdate} disabled={updateCustody.isPending || isUploading}>
-                  {(updateCustody.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                  {isUploading ? "جاري رفع الصور..." : "تحديث العهدة"}
-                </Button>
-              ) : (
-                <>
-                  <Button className="w-full gap-2" onClick={handleSave} disabled={!!savedData || createCustody.isPending || isUploading}>
-                    {(createCustody.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                    {isUploading ? "جاري رفع الصور..." : "حفظ العهدة"}
-                  </Button>
-                  <Button variant="outline" className="w-full gap-2" onClick={handlePrint} disabled={!savedData}>
-                    <Printer className="w-4 h-4" />
-                    معاينة قبل الطباعة
-                  </Button>
-                  {savedData && (
-                    <p className="text-xs text-center text-green-600 bg-green-50 rounded-lg p-2">
-                      تم الحفظ بنجاح | الرقم الورقي: {documentCode}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
+          <div className="border-t border-border bg-background px-6 py-4">
+            {editingItem ? (
+              <Button className="w-full gap-2" onClick={handleUpdate} disabled={updateCustody.isPending || isUploading}>
+                {(updateCustody.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                {isUploading ? "جاري رفع الصور..." : "حفظ التعديلات"}
+              </Button>
+            ) : (
+              <Button className="w-full gap-2" onClick={handleSave} disabled={createCustody.isPending || isUploading}>
+                {(createCustody.isPending || isUploading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                {isUploading ? "جاري رفع الصور..." : "حفظ كمسودة"}
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>
+      <InventoryApprovalDialog open={!!approvalCandidate} name={approvalCandidate?.name || ""} pending={approveDraft.isPending} onCancel={() => setApprovalCandidate(null)} onConfirm={confirmApproval} />
     </DashboardLayout>
   );
 }

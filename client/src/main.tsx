@@ -6,6 +6,22 @@ import superjson from "superjson";
 import App from "./App";
 import "./index.css";
 
+// Analytics is optional; incomplete configuration must not request placeholder URLs.
+const analyticsEndpoint = import.meta.env.VITE_ANALYTICS_ENDPOINT;
+const analyticsWebsite = import.meta.env.VITE_ANALYTICS_WEBSITE_ID;
+if (analyticsEndpoint && analyticsWebsite) {
+  try {
+    const endpoint = new URL(analyticsEndpoint);
+    if (["https:", "http:"].includes(endpoint.protocol)) {
+      const script = document.createElement("script");
+      script.defer = true;
+      script.src = `${endpoint.href.replace(/\/$/, "")}/umami`;
+      script.dataset.websiteId = analyticsWebsite;
+      document.head.appendChild(script);
+    }
+  } catch { /* Invalid optional configuration leaves analytics disabled. */ }
+}
+
 const queryClient = new QueryClient();
 
 // لا نعيد التوجيه إلى OAuth - نترك AuthGate في App.tsx يعرض صفحة تسجيل الدخول المحلية

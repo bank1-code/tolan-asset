@@ -59,7 +59,7 @@ export default function NotificationPanel() {
   const { user } = useAuth();
 
   // جلب آخر 10 عمليات من سجل التدقيق
-  const canViewAudit = user?.role === "owner" || user?.role === "admin" || user?.role === "accountant";
+  const canViewAudit = user?.role === "owner" || user?.role === "admin" || user?.role === "accounting_manager" || user?.role === "accountant";
   const { data, refetch } = trpc.records.audit.list.useQuery(
     { limit: 10, offset: 0 },
     { refetchInterval: 30000, enabled: canViewAudit }

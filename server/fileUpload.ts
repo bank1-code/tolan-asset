@@ -13,7 +13,9 @@ const router = Router();
 // استخدام الذاكرة بدلاً من القرص
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB حد أقصى
+  // Busboy emits partsLimit when the completed part count reaches this limit.
+  // files/fields enforce exactly one file; allow its terminating boundary here.
+  limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 0, parts: 2, headerPairs: 32 },
   fileFilter: (_req, file, cb) => {
     const allowed = [
       "application/pdf",
@@ -50,18 +52,19 @@ function getExtension(mimetype: string): string {
   return map[mimetype] || "bin";
 }
 
-router.post("/api/upload", upload.single("file"), async (req, res) => {
+router.post("/api/upload", async (req, res, next) => {
   try {
-    // التحقق من المصادقة باستخدام sdk
-    try {
-      const user = await sdk.authenticateRequest(req as any);
-      if (!(["owner", "admin", "accountant"] as string[]).includes(user.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لرفع مستندات الأرشيف" });
-      }
-    } catch {
-      return res.status(401).json({ error: "غير مصرح - يرجى تسجيل الدخول" });
-    }
-
+    const user=await sdk.authenticateRequest(req as any);
+    if(!(["owner","admin","accounting_manager","accountant"] as string[]).includes(user.role))return res.status(403).json({error:"ليس لديك صلاحية لرفع مستندات الأرشيف"});
+    next();
+  } catch { res.status(401).json({error:"غير مصرح - يرجى تسجيل الدخول"}); }
+}, (req,res,next)=>{
+  upload.single("file")(req,res,error=>{
+    if(error)return res.status(error instanceof multer.MulterError&&error.code==='LIMIT_FILE_SIZE'?413:400).json({error:"ملف غير صالح أو تجاوز حدود الرفع"});
+    next();
+  });
+}, async (req, res) => {
+  try {
     if (!req.file) {
       return res.status(400).json({ error: "لم يتم إرسال ملف" });
     }

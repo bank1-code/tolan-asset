@@ -253,7 +253,7 @@ export default function Dashboard() {
   const totalLocations = stats?.locationCount || 0;
 
   const pieData = [
-    { name: "نشط", value: activeAssets || 1, color: "#0D9488" },
+    { name: "نشط", value: activeAssets, color: "#0D9488" },
     { name: "مستبعد جزئياً", value: partialExcluded, color: "#D4A574" },
     { name: "مستبعد كلياً", value: excludedAssets, color: "#EF4444" },
   ].filter(d => d.value > 0);

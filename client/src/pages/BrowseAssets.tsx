@@ -92,6 +92,8 @@ function statusInfo(status: string | null) {
   switch (status) {
     case "ACTIVE":
       return { label: "نشط", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" };
+    case "REPLACED":
+      return { label: "مستبدل بالضمان", cls: "bg-violet-100 text-violet-700 border-violet-200" };
     case "EXCLUDED":
       return { label: "مستبعد", cls: "bg-red-100 text-red-700 border-red-200" };
     case "TRANSFERRED":

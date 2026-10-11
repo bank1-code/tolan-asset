@@ -1,22 +1,26 @@
+import { remainingQuantity } from "@shared/inventoryQuantity";
 /*
  * Design: Calm Luxury - استبعادات الأصول والعهد
  * تبويبات علوية: أصول / عهد
- * كل قسم يحتوي 3 تبويبات: استبعاد جزئي / استبعاد كلي / إدارة الاستبعادات
+ * استبعاد موحد بالكمية المطلوبة / إدارة الاستبعادات
  * كل تبويب استبعاد يحتوي 5 تبويبات ذكية متسلسلة
  * مربوطة بالـ API الحقيقي عبر tRPC
  */
+import ExclusionHistory from "@/components/ExclusionHistory";
 import DashboardLayout from "@/components/DashboardLayout";
+import WorkflowConfirmationDialog from "@/components/WorkflowConfirmationDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import { printExclusionReport } from "@/lib/exclusionReport";
+import { isDisplayImageUrl } from "@shared/imageUrls";
 import {
   AlertTriangle, Box, CheckCircle2, ChevronLeft, ChevronRight,
   Eye, FileText, ImagePlus, Loader2, Package, Printer, RefreshCw, Search,
   Trash2, Users, X, XCircle
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 
 /* ─── واجهات ─── */
@@ -63,8 +67,7 @@ function SmartTabs({ activeTab, maxAllowed, onTabChange, tabs }: {
 /* ═══════════════════════════════════════════════════════════════
    مكون الاستبعاد العام (يعمل للأصول والعهد) - مربوط بالـ API
    ═══════════════════════════════════════════════════════════════ */
-function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; category: "asset" | "custody" }) {
-  const isPartial = mode === "partial";
+function ExclusionWizard({ category }: { category: "asset" | "custody" }) {
   const isAsset = category === "asset";
   const itemLabel = isAsset ? "الأصل" : "العهدة";
   const codeLabel = isAsset ? "رمز الأصل" : "رمز العهدة";
@@ -72,7 +75,9 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
   const { data: assetsData } = trpc.inventory.assets.list.useQuery({});
   const { data: custodyData } = trpc.inventory.custody.list.useQuery({});
   const { data: exclusionTypesData } = trpc.settings.exclusionTypes.list.useQuery();
-  const { data: nextCodeData } = trpc.operations.exclusions.getNextCode.useQuery();
+  const { data: draftsData } = trpc.operations.exclusions.drafts.useQuery();
+  const saveDraftMutation = trpc.operations.exclusions.saveDraft.useMutation();
+  const deleteDraftMutation = trpc.operations.exclusions.deleteDraft.useMutation();
 
   const utils = trpc.useUtils();
   const createExclusion = trpc.operations.exclusions.create.useMutation({
@@ -80,7 +85,7 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
       utils.operations.exclusions.list.invalidate();
       utils.inventory.assets.list.invalidate();
       utils.inventory.custody.list.invalidate();
-      utils.operations.exclusions.getNextCode.invalidate();
+      utils.operations.exclusions.drafts.invalidate();
     },
   });
   const uploadImage = trpc.upload.image.useMutation();
@@ -91,6 +96,7 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
   const [searchCode, setSearchCode] = useState("");
   const [foundItem, setFoundItem] = useState<any>(null);
   const [searchDone, setSearchDone] = useState(false);
+  const [searchMatches, setSearchMatches] = useState<any[]>([]);
 
   // التبويبات الذكية
   const [activeTab, setActiveTab] = useState(0);
@@ -112,6 +118,15 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
   const [executed, setExecuted] = useState(false);
   const [executionCode, setExecutionCode] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const [draftId, setDraftId] = useState<number>();
+  const [effectiveDate, setEffectiveDate] = useState(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh" }).format(new Date()));
+  const [executionRecord, setExecutionRecord] = useState<any>(null);
+  const [executionConfirmation, setExecutionConfirmation] = useState(false);
+  const executionPending = useRef(false);
+  const availableQuantity = Math.max(0, foundItem ? remainingQuantity(foundItem) : 0);
+  const mode: "partial" | "full" = Number(excludeQty) === availableQuantity && availableQuantity > 0 ? "full" : "partial";
+  const isPartial = mode === "partial";
+  const busy = saveDraftMutation.isPending || deleteDraftMutation.isPending || createExclusion.isPending;
 
   const tabLabels = [
     `1) بيانات ${itemLabel}`,
@@ -128,32 +143,41 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
 
   /* ─── البحث ─── */
   const handleSearch = () => {
+    if (busy) return;
     if (!searchCode.trim()) { toast.warning(`أدخل ${codeLabel}`); return; }
-    const item = allItems.find((a: any) => {
+    const matches = allItems.filter((a: any) => {
       const itemCode = isAsset ? a.assetCode : a.code;
       return (itemCode || "").toLowerCase() === searchCode.trim().toLowerCase();
     });
+    if (matches.length > 1) { setFoundItem(null); setSearchDone(true); setSearchMatches(matches); toast.warning("الرقم مكرر في السجلات القديمة؛ اختر السجل المقصود من النتائج"); return; }
+    selectItem(matches[0]);
+  };
+  const selectItem = (item: any) => {
+    setSearchMatches([]);
     setSearchDone(true);
     if (!item) { setFoundItem(null); return; }
-    if ((item as any).status === "EXCLUDED" || (item as any).quantity <= 0) {
+    if ((item as any).status !== "ACTIVE" || remainingQuantity(item as any) <= 0) {
       setFoundItem(null);
-      toast.error(`${itemLabel} مستبعد بالكامل أو كميته صفر ولا يمكن استبعاده`);
+      toast.error(`${itemLabel} غير نشط أو كميته صفر ولا يمكن استبعاده`);
       return;
     }
+    setDraftId(undefined); setExecutionRecord(null);
+    setEffectiveDate(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh" }).format(new Date()));
     setFoundItem(item);
     setActiveTab(0); setMaxAllowed(0); setDraftSaved(false); setExecuted(false);
-    setExcludeQty(isPartial ? "" : String((item as any).quantity));
+    setExcludeQty("");
     setExclusionType(""); setReason(""); setResponsibleCount("");
     setResponsibles([]); setSignaturesGenerated(false); setImages([]); setIsEditing(false);
   };
 
   /* ─── التحقق من بيانات الاستبعاد ─── */
   const validateExclusionData = (): boolean => {
-    if (isPartial) {
-      const qty = parseInt(excludeQty);
-      if (!qty || qty <= 0) { toast.warning("الكمية يجب أن تكون أكبر من صفر"); return false; }
-      if (foundItem && qty > foundItem.quantity) { toast.warning(`لا يمكن استبعاد كمية أكبر من الحالية (${foundItem.quantity})`); return false; }
+    {
+      const qty = Number(excludeQty);
+      if (!Number.isInteger(qty) || qty <= 0) { toast.warning("الكمية يجب أن تكون عددًا صحيحًا أكبر من صفر"); return false; }
+      if (foundItem && qty > availableQuantity) { toast.warning(`لا يمكن استبعاد كمية أكبر من الحالية (${availableQuantity})`); return false; }
     }
+    if (!effectiveDate) { toast.warning("حدد تاريخ سريان الاستبعاد"); return false; }
     if (!exclusionType) { toast.warning("حدد نوع الاستبعاد"); return false; }
     if (!reason.trim() || reason.trim().length < 5) { toast.warning("سبب الاستبعاد يجب أن يكون مفصلاً (5 أحرف على الأقل)"); return false; }
     const count = parseInt(responsibleCount);
@@ -238,44 +262,57 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
     input.click();
   };
 
-  const saveDraft = () => {
-    if (!validateExclusionData() || !validateSignatures() || !validateImageUploads()) return;
-    setDraftSaved(true); setIsEditing(false);
-    toast.success("تم حفظ البيانات كمسودة جاهزة للتنفيذ");
-  };
-
-  const executeExclusion = async () => {
-    if (!validateImageUploads()) return;
-    const code = nextCodeData?.code || `EXC-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")}`;
+  const buildPayload = () => ({
+    entityType: category, entityId: foundItem.id, exclusionMode: mode,
+    exclusionTypeId: exclusionTypes.find((t: any) => t.name === exclusionType)!.id,
+    reason, quantityExcluded: Number(excludeQty),
+    effectiveDate, responsibleData: responsibles,
+    exclusionImages: images.map(i => i.url).filter((url): url is string => Boolean(url)), draftId,
+  });
+  const saveDraft = async () => {
+    if (busy || executed || !validateExclusionData() || !validateSignatures() || !validateImageUploads()) return;
     try {
-      const excTypeObj = exclusionTypes.find((t: any) => t.name === exclusionType);
-      await createExclusion.mutateAsync({
-        entityType: category,
-        entityId: foundItem.id,
-        exclusionCode: code,
-        exclusionMode: isPartial ? "partial" : "full",
-        exclusionTypeId: excTypeObj?.id || null,
-        reason,
-        quantityBefore: foundItem.quantity,
-        quantityExcluded: isPartial ? parseInt(excludeQty) : foundItem.quantity,
-        quantityRemaining: isPartial ? foundItem.quantity - parseInt(excludeQty) : 0,
-        oldEmployeeName: foundItem.employeeName || null,
-        oldDepartmentName: foundItem.departmentName || null,
-        oldLocationName: foundItem.locationName || null,
-        responsibleData: responsibles,
-        exclusionImages: images.map(i => i.url).filter((url): url is string => Boolean(url)),
-      });
-      setExecutionCode(code); setExecuted(true); setDraftSaved(false);
-      const qty = isPartial ? excludeQty : String(foundItem.quantity);
-      const remaining = isPartial ? (foundItem.quantity - parseInt(excludeQty)) : 0;
-      toast.success(`تم تنفيذ الاستبعاد بنجاح!\nرقم العملية: ${code}\nالكمية المستبعدة: ${qty}\nالكمية المتبقية: ${remaining}`);
-    } catch (error: any) {
-      toast.error(error.message || "حدث خطأ أثناء تنفيذ الاستبعاد");
+      const result = await saveDraftMutation.mutateAsync(buildPayload());
+      setDraftId(result.id); setDraftSaved(true); setIsEditing(false);
+      utils.operations.exclusions.drafts.invalidate();
+      toast.success("تم حفظ المسودة في النظام ويمكن استكمالها لاحقًا");
+    } catch (error: any) { toast.error(error.message || "فشل حفظ المسودة"); }
+  };
+  const executeExclusion = async () => {
+    if (busy || executed || executionPending.current || !validateExclusionData() || !validateSignatures() || !validateImageUploads()) return;
+    executionPending.current = true;
+    try {
+      const result = await createExclusion.mutateAsync(buildPayload());
+      setExecutionRecord(result.record); setExecutionCode(result.record.exclusionCode);
+      setExecuted(true); setDraftSaved(false); setDraftId(undefined);
+      toast.success("تم تنفيذ الاستبعاد: " + result.record.exclusionCode + " — المتبقي: " + result.record.quantityRemaining);
+    } catch (error: any) { toast.error(error.message || "حدث خطأ أثناء تنفيذ الاستبعاد"); }
+    finally { executionPending.current = false; setExecutionConfirmation(false); }
+  };
+  const restoreDraft = (draft: any) => {
+    const data = draft.payload;
+    const item: any = allItems.find((item: any) => item.id === data.entityId);
+    if (!item || item.status !== "ACTIVE" || remainingQuantity(item) <= 0) {
+      toast.error("السجل غير موجود أو مستبعد بالكامل؛ يمكن إلغاء المسودة"); return;
     }
+    setFoundItem(item); setSearchCode((isAsset ? item.assetCode : item.code) || "");
+    setDraftId(draft.id); setEffectiveDate(data.effectiveDate); setExcludeQty(String(data.quantityExcluded));
+    setExclusionType(exclusionTypes.find((t: any) => t.id === data.exclusionTypeId)?.name || "");
+    setReason(data.reason); setResponsibles(data.responsibleData); setResponsibleCount(String(data.responsibleData.length));
+    setImages(data.exclusionImages.map((url: string, i: number) => ({ id: String(i), name: "صورة محفوظة", url, preview: url })));
+    setSignaturesGenerated(true); setDraftSaved(true); setIsEditing(false); setExecuted(false); setExecutionRecord(null);
+    setMaxAllowed(4); setActiveTab(4);
   };
 
-  const cancelDraft = () => {
-    setExcludeQty(isPartial ? "" : String(foundItem ? foundItem.quantity : 0));
+  const cancelDraft = async () => {
+    if (busy) return;
+    if (draftId) {
+      try { await deleteDraftMutation.mutateAsync({ id: draftId }); }
+      catch (error: any) { toast.error(error.message); return; }
+      utils.operations.exclusions.drafts.invalidate();
+    }
+    setDraftId(undefined);
+    setExcludeQty("");
     setExclusionType(""); setReason(""); setResponsibleCount(""); setResponsibles([]);
     setSignaturesGenerated(false); setImages([]); setDraftSaved(false); setIsEditing(false);
   };
@@ -285,7 +322,7 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
       {/* عنوان */}
       <div className="text-center py-2">
         <h3 className={`text-base font-bold ${isPartial ? "text-amber-600" : "text-red-600"}`}>
-          {isPartial ? `استبعاد جزئي (${itemLabel})` : `استبعاد كلي (${itemLabel})`}
+          {`استبعاد ${itemLabel}`}
         </h3>
       </div>
 
@@ -300,22 +337,43 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
           className="flex-1 h-9 px-3 rounded-lg bg-background border border-border text-sm text-right focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
           dir="ltr"
         />
-        <Button size="sm" className="h-9 text-xs gap-1.5" onClick={handleSearch}>
+        <Button size="sm" className="h-9 text-xs gap-1.5" disabled={busy} onClick={handleSearch}>
           <Search className="w-3.5 h-3.5" /> بحث
         </Button>
       </div>
 
       {/* نتيجة البحث */}
-      {searchDone && !foundItem && (
+      {searchMatches.length > 1 && <div className="border rounded-xl p-3 space-y-2"><p className="text-xs">أكثر من سجل يحمل الرقم نفسه. اختر السجل بناءً على اسمه وموقعه والموظف.</p>{searchMatches.map(item => <Button key={item.id} variant="outline" className="w-full justify-start text-xs" onClick={() => selectItem(item)} disabled={item.status !== "ACTIVE" || remainingQuantity(item) <= 0}>#{item.id} · {isAsset ? item.assetName : item.name} · {item.locationName || "—"} · {item.employeeName || "—"} · المتبقي {remainingQuantity(item)}</Button>)}</div>}
+      {searchDone && !foundItem && searchMatches.length === 0 && (
         <div className="flex items-center gap-2 bg-destructive/10 text-destructive rounded-xl p-4 border border-destructive/20">
           <XCircle className="w-4 h-4" />
           <span className="text-sm font-bold">لا يوجد {itemLabel} بهذا الرمز أو الكمية صفر</span>
         </div>
       )}
 
+      <div className="mb-4 space-y-2">
+        {(draftsData || []).filter((draft: any) => draft.payload.entityType === category).map((draft: any) => (
+          <div key={draft.id} className="flex flex-wrap items-center gap-2 border rounded-lg p-3 text-xs">
+            <span>مسودة #{draft.id} — {draft.payload.reason}</span>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => restoreDraft(draft)}>استكمال المسودة</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={async () => {
+              if (!confirm("إلغاء المسودة المحفوظة؟")) return;
+              try { await deleteDraftMutation.mutateAsync({ id: draft.id });
+                utils.operations.exclusions.drafts.invalidate();
+                if (draftId === draft.id) { setDraftId(undefined); setDraftSaved(false); }
+              } catch (error: any) { toast.error(error.message); }
+            }}>إلغاء المسودة</Button>
+          </div>
+        ))}
+      </div>
       {foundItem && (
         <>
-          <SmartTabs activeTab={activeTab} maxAllowed={maxAllowed} onTabChange={setActiveTab} tabs={tabLabels} />
+          <div className="bg-card rounded-xl border p-4 mb-4 grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">{[
+ [codeLabel, (isAsset ? foundItem.assetCode : foundItem.code) || "—"], ["الاسم", (isAsset ? foundItem.assetName : foundItem.name)],
+ ["الموقع", foundItem.locationName || "—"], ["القسم", foundItem.departmentName || "—"], ["الموظف", foundItem.employeeName || "—"],
+ ["الحالة", executionRecord ? (executionRecord.quantityRemaining === 0 ? "مستبعد بالكامل" : "نشط") : (foundItem.status === "ACTIVE" ? "نشط" : foundItem.status)], ["الكمية الأصلية", String(foundItem.quantity)], [executionRecord ? "المستبعد إجمالاً" : "المستبعد سابقاً", String(executionRecord ? executionRecord.previouslyExcluded + executionRecord.quantityExcluded : foundItem.excludedQuantity || 0)], ["المستبدل بالضمان", String(foundItem.warrantyReplacedQuantity || 0)], ["المتبقي الفعلي", String(executionRecord ? executionRecord.quantityRemaining : availableQuantity)]
+].map(([label,value]) => <div key={label}><span className="text-muted-foreground">{label}: </span><strong>{value}</strong></div>)}</div>
+          <SmartTabs activeTab={executed ? 4 : activeTab} maxAllowed={maxAllowed} onTabChange={idx => { if (!executed && !busy) setActiveTab(idx); }} tabs={tabLabels} />
 
           {/* ─── تبويب 1: بيانات العنصر ─── */}
           {activeTab === 0 && (
@@ -329,8 +387,10 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                   {[
                     [codeLabel, (isAsset ? foundItem.assetCode : foundItem.code) || "—"],
                     [`اسم ${itemLabel}`, (isAsset ? foundItem.assetName : foundItem.name) || "—"],
-                    ["الكمية الحالية", String(foundItem.quantity)],
-                    ["القيمة", `${Number((isAsset ? foundItem.assetValue : foundItem.unitValue) || 0).toLocaleString()} ريال`],
+                    ["الكمية الأصلية", String(foundItem.quantity)],
+                    ["المستبعد سابقًا", String(foundItem.excludedQuantity || 0)],
+                    ["المتبقي الفعلي", String(availableQuantity)],
+                    ["القيمة", `${Number(foundItem.assetValue || 0).toLocaleString()} ريال`],
                     ["المسؤول", foundItem.employeeName || "—"],
                     ["القسم", foundItem.departmentName || "—"],
                     ["الموقع", foundItem.locationName || "—"],
@@ -357,22 +417,21 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
               <div className="bg-card rounded-xl border border-border p-5">
                 <h4 className="text-sm font-bold text-foreground mb-4 pb-2 border-b border-border">بيانات الاستبعاد</h4>
                 <div className="space-y-4">
-                  {isPartial && (
+                  <label className="block text-xs font-bold">تاريخ سريان الاستبعاد
+                    <input type="date" value={effectiveDate} onChange={e => setEffectiveDate(e.target.value)} disabled={busy || executed || (draftSaved && !isEditing)} className="block h-9 border rounded px-3 mt-2" />
+                  </label>
+                  {(
                     <div>
-                      <label className="text-xs font-bold text-foreground mb-1 block">الكمية المراد استبعادها (الحالية: {foundItem.quantity}):</label>
+                      <label className="text-xs font-bold text-foreground mb-1 block">الكمية المراد استبعادها (الحالية: {availableQuantity}):</label>
                       <input type="number" value={excludeQty} onChange={(e) => setExcludeQty(e.target.value)}
-                        min="1" max={foundItem.quantity} disabled={draftSaved && !isEditing}
+                        min="1" max={availableQuantity} disabled={busy || executed || (draftSaved && !isEditing)}
                         className="w-full h-9 px-3 rounded-lg bg-muted/40 border border-border text-sm text-center focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50" />
                     </div>
                   )}
-                  {!isPartial && (
-                    <div className="bg-red-50 dark:bg-red-950/20 rounded-lg p-3 border border-red-200 dark:border-red-900/30">
-                      <p className="text-xs text-red-700 dark:text-red-400 font-bold">تنبيه: استبعاد كلي - سيتم استبعاد كامل الكمية ({foundItem.quantity})</p>
-                    </div>
-                  )}
+                  <p className="text-xs text-muted-foreground">أدخل الكمية المطلوبة من المتبقي ({availableQuantity}). استبعاد كامل المتبقي يقفل السجل تلقائياً.</p>
                   <div>
                     <label className="text-xs font-bold text-foreground mb-1 block">نوع الاستبعاد:</label>
-                    <Select value={exclusionType} onValueChange={setExclusionType} disabled={draftSaved && !isEditing}>
+                    <Select value={exclusionType} onValueChange={setExclusionType} disabled={busy || executed || (draftSaved && !isEditing)}>
                       <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="اختر نوع الاستبعاد..." /></SelectTrigger>
                       <SelectContent>
                         {exclusionTypes.map((t: any) => <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>)}
@@ -381,7 +440,7 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                   </div>
                   <div>
                     <label className="text-xs font-bold text-foreground mb-1 block">سبب الاستبعاد (تفصيلي):</label>
-                    <textarea value={reason} onChange={(e) => setReason(e.target.value)} disabled={draftSaved && !isEditing}
+                    <textarea value={reason} onChange={(e) => setReason(e.target.value)} disabled={busy || executed || (draftSaved && !isEditing)}
                       rows={3} placeholder="اكتب سبب الاستبعاد بالتفصيل..."
                       className="w-full px-3 py-2 rounded-lg bg-muted/40 border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50 resize-none" />
                   </div>
@@ -389,10 +448,10 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                     <div className="flex-1">
                       <label className="text-xs font-bold text-foreground mb-1 block">عدد المسؤولين عن الاستبعاد (1-6):</label>
                       <input type="number" value={responsibleCount} onChange={(e) => setResponsibleCount(e.target.value)}
-                        min="1" max="6" disabled={draftSaved && !isEditing}
+                        min="1" max="6" disabled={busy || executed || (draftSaved && !isEditing)}
                         className="w-full h-9 px-3 rounded-lg bg-muted/40 border border-border text-sm text-center focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50" />
                     </div>
-                    <Button size="sm" variant="outline" className="h-9 text-xs gap-1.5" onClick={generateSignatures} disabled={draftSaved && !isEditing}>
+                    <Button size="sm" variant="outline" className="h-9 text-xs gap-1.5" onClick={generateSignatures} disabled={busy || executed || (draftSaved && !isEditing)}>
                       <Users className="w-3.5 h-3.5" /> توليد خانات التواقيع
                     </Button>
                   </div>
@@ -498,14 +557,14 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                                     <label className="text-[10px] text-muted-foreground">وظيفة {globalIdx + 1}:</label>
                                     <input type="text" value={resp.job}
                                       onChange={(e) => { const u = [...responsibles]; u[globalIdx] = { ...u[globalIdx], job: e.target.value }; setResponsibles(u); }}
-                                      disabled={draftSaved && !isEditing}
+                                      disabled={busy || executed || (draftSaved && !isEditing)}
                                       className="w-full h-8 px-2 rounded-lg bg-muted/40 border border-border text-xs text-center focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50" />
                                   </div>
                                   <div>
                                     <label className="text-[10px] text-muted-foreground">اسم {globalIdx + 1}:</label>
                                     <input type="text" value={resp.name}
                                       onChange={(e) => { const u = [...responsibles]; u[globalIdx] = { ...u[globalIdx], name: e.target.value }; setResponsibles(u); }}
-                                      disabled={draftSaved && !isEditing}
+                                      disabled={busy || executed || (draftSaved && !isEditing)}
                                       className="w-full h-8 px-2 rounded-lg bg-muted/40 border border-border text-xs text-center focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50" />
                                   </div>
                                 </div>
@@ -542,10 +601,13 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                 <div className="bg-muted/30 rounded-xl p-4 space-y-2 mb-4">
                   {[
                     [itemLabel, `${(isAsset ? foundItem.assetCode : foundItem.code) || "—"} - ${(isAsset ? foundItem.assetName : foundItem.name) || "—"}`],
+                    [executionRecord ? "الحالة قبل التنفيذ" : "الحالة الحالية", foundItem.status === "ACTIVE" ? "نشط" : foundItem.status],
+                    ["مدى الاستبعاد المحسوب", (executionRecord?.exclusionMode || mode) === "full" ? "كامل المتبقي" : "جزء من المتبقي"],
                     ["نوع الاستبعاد", exclusionType || "—"],
                     ["السبب", reason || "—"],
-                    ["الكمية المستبعدة", isPartial ? excludeQty : String(foundItem.quantity)],
-                    ["الكمية المتبقية", String(isPartial ? foundItem.quantity - parseInt(excludeQty || "0") : 0)],
+                    ["تاريخ سريان الاستبعاد", effectiveDate],
+                    ["الكمية المستبعدة", executionRecord ? String(executionRecord.quantityExcluded) : excludeQty],
+                    ["الكمية المتبقية", String(executionRecord ? executionRecord.quantityRemaining : availableQuantity - Number(excludeQty || "0"))],
                     ["عدد المسؤولين", String(responsibles.length)],
                     ["عدد الصور", String(images.filter(i => i.url).length)],
                   ].map(([label, value]) => (
@@ -558,6 +620,8 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                   ))}
                 </div>
 
+                <div className="text-xs space-y-2 mb-4">{responsibles.map((r,i) => <p key={i}>{r.job}: {r.name}</p>)}<div className="flex flex-wrap gap-2">{images.filter(i=>i.url).map(i => <img key={i.id} src={i.url} alt={i.name} className="w-20 h-20 object-contain rounded border" />)}</div></div>
+                {!executed && <p className="text-xs text-destructive border border-destructive/30 rounded p-3 mb-4">تنفيذ الاستبعاد عملية تاريخية لا يمكن حذفها أو تعديلها مباشرة بعد التنفيذ. راجع الكمية وتاريخ السريان والمسؤولين والمرفقات.</p>}
                 {/* حالة + أزرار */}
                 {executed ? (
                   <div className="space-y-3">
@@ -568,23 +632,10 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                     <p className="text-xs text-primary font-bold">رقم العملية: {executionCode}</p>
                     <div className="flex gap-2">
                       <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => {
-                        printExclusionReport({
-                          exclusionCode: executionCode,
-                          exclusionMode: isPartial ? "partial" : "full",
-                          entityType: category,
-                          entityName: foundItem?.name || foundItem?.assetName || "—",
-                          entityCode: foundItem?.code || foundItem?.assetCode || "—",
-                          reason,
-                          quantityBefore: foundItem?.quantity || 0,
-                          quantityExcluded: isPartial ? parseInt(excludeQty || "0") : (foundItem?.quantity || 0),
-                          quantityRemaining: isPartial ? (foundItem?.quantity || 0) - parseInt(excludeQty || "0") : 0,
-                          oldEmployeeName: foundItem?.employeeName,
-                          oldDepartmentName: foundItem?.departmentName,
-                          oldLocationName: foundItem?.locationName,
-                          responsibles,
-                          exclusionDate: new Date().toISOString(),
-                          images: images.map(i => i.url).filter((url): url is string => Boolean(url)),
-                        });
+                        if (!executionRecord) return;
+                        printExclusionReport({ ...executionRecord, entityName: executionRecord.entityName || "—",
+                          entityCode: executionRecord.entityCode || "—", responsibles: executionRecord.responsibleData,
+                          images: executionRecord.exclusionImages, exclusionDate: executionRecord.exclusionDate });
                       }}>
                         <FileText className="w-3.5 h-3.5" /> إعادة فتح التقرير
                       </Button>
@@ -597,12 +648,12 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                       <span className="text-sm font-bold">المسودة جاهزة للتنفيذ</span>
                     </div>
                     <div className="flex gap-2">
-                      <Button size="sm" variant="destructive" className="h-8 text-xs gap-1.5" disabled={createExclusion.isPending}
-                        onClick={() => { if (confirm("هل أنت متأكد من تنفيذ الاستبعاد؟\nسيتم تحديث الكمية وتسجيل العملية.\nهذا الإجراء لا يمكن التراجع عنه.")) executeExclusion(); }}>
+                      <Button size="sm" variant="destructive" className="h-8 text-xs gap-1.5" disabled={busy}
+                        onClick={() => setExecutionConfirmation(true)}>
                         {createExclusion.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                         تنفيذ الاستبعاد
                       </Button>
-                      <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => { setIsEditing(true); setDraftSaved(false); }}>
+                      <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" disabled={busy} onClick={() => { setIsEditing(true); setDraftSaved(false); }}>
                         تعديل البيانات
                       </Button>
                       <Button size="sm" variant="ghost" className="h-8 text-xs gap-1.5 text-destructive"
@@ -618,20 +669,20 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
                       <span className="text-sm font-bold">جاري التعديل - يمكنك تعديل جميع الحقول</span>
                     </div>
                     <div className="flex gap-2">
-                      <Button size="sm" className="h-8 text-xs gap-1.5" onClick={saveDraft}>حفظ التعديلات</Button>
+                      <Button size="sm" className="h-8 text-xs gap-1.5" disabled={busy} onClick={saveDraft}>حفظ التعديلات</Button>
                       <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={generateSignatures}>إعادة توليد التواقيع</Button>
-                      <Button size="sm" variant="ghost" className="h-8 text-xs gap-1.5 text-destructive" onClick={() => { setIsEditing(false); setDraftSaved(true); }}>إلغاء التعديل</Button>
+                      <Button size="sm" variant="ghost" className="h-8 text-xs gap-1.5 text-destructive" disabled={busy} onClick={() => { const saved = (draftsData || []).find(d => d.id === draftId); if (saved) restoreDraft(saved); }}>إلغاء التعديل</Button>
                     </div>
                   </div>
                 ) : (
                   <div className="flex gap-2">
-                    <Button size="sm" className="h-8 text-xs gap-1.5" onClick={saveDraft}>حفظ البيانات</Button>
+                    <Button size="sm" className="h-8 text-xs gap-1.5" disabled={busy} onClick={saveDraft}>حفظ كمسودة</Button>
                     <Button size="sm" variant="ghost" className="h-8 text-xs gap-1.5 text-destructive" onClick={() => { if (confirm("هل أنت متأكد من الإلغاء؟")) cancelDraft(); }}>إلغاء</Button>
                   </div>
                 )}
               </div>
               <div className="flex justify-end">
-                <Button variant="outline" onClick={() => setActiveTab(3)} className="gap-1.5">
+                <Button variant="outline" disabled={executed || busy} onClick={() => setActiveTab(3)} className="gap-1.5">
                   <ChevronRight className="w-3.5 h-3.5" /> السابق
                 </Button>
               </div>
@@ -639,6 +690,16 @@ function ExclusionWizard({ mode, category }: { mode: "partial" | "full"; categor
           )}
         </>
       )}
+      <WorkflowConfirmationDialog
+        open={executionConfirmation}
+        title="تأكيد تنفيذ الاستبعاد"
+        description="سيتم تحديث الكمية وتسجيل الاستبعاد كعملية تاريخية مقفلة لا يمكن تعديلها أو حذفها مباشرة."
+        recordName={`${(isAsset ? foundItem?.assetCode : foundItem?.code) ?? ""} · الكمية ${excludeQty} · السريان ${effectiveDate}`}
+        confirmLabel="تأكيد الاستبعاد"
+        pending={busy}
+        onCancel={() => setExecutionConfirmation(false)}
+        onConfirm={() => void executeExclusion()}
+      />
     </div>
   );
 }
@@ -678,22 +739,24 @@ function ExclusionManagement({ category }: { category: "asset" | "custody" }) {
 
   // الحصول على اسم العنصر من قوائم الأصول/العهد
   const getEntityName = (record: any) => {
+    if (record.entityName) return record.entityName;
     if (record.entityType === "asset") {
       const found = (assetsData || []).find((item: any) => item.id === record.entityId);
-      return found ? (found.assetName || "—") : "—";
+      return found ? (found.assetName || "—") + " (حالي؛ غير محفوظ تاريخيًا)" : "غير محفوظ تاريخيًا";
     } else {
       const found = (custodyData || []).find((item: any) => item.id === record.entityId);
-      return found ? (found.name || "—") : "—";
+      return found ? (found.name || "—") + " (حالي؛ غير محفوظ تاريخيًا)" : "غير محفوظ تاريخيًا";
     }
   };
 
   const getEntityCode = (record: any) => {
+    if (record.entityCode) return record.entityCode;
     if (record.entityType === "asset") {
       const found = (assetsData || []).find((item: any) => item.id === record.entityId);
-      return found ? (found.assetCode || "—") : "—";
+      return found ? (found.assetCode || "—") + " (حالي)" : "غير محفوظ تاريخيًا";
     } else {
       const found = (custodyData || []).find((item: any) => item.id === record.entityId);
-      return found ? (found.code || "—") : "—";
+      return found ? (found.code || "—") + " (حالي)" : "غير محفوظ تاريخيًا";
     }
   };
 
@@ -701,7 +764,7 @@ function ExclusionManagement({ category }: { category: "asset" | "custody" }) {
     const responsibles = Array.isArray(record.responsibleData) ? record.responsibleData : [];
     // استخراج روابط الصور من exclusionImages (S3 URLs أو data URLs)
     const rawImages = Array.isArray(record.exclusionImages) ? record.exclusionImages : [];
-    const images = rawImages.filter((url: string) => url && (url.startsWith('http') || url.startsWith('data:')));
+    const images = rawImages.filter((url: unknown): url is string => typeof url === "string" && isDisplayImageUrl(url));
     printExclusionReport({
       exclusionCode: record.exclusionCode,
       exclusionMode: record.exclusionMode,
@@ -709,6 +772,8 @@ function ExclusionManagement({ category }: { category: "asset" | "custody" }) {
       entityName: getEntityName(record),
       entityCode: getEntityCode(record),
       reason: record.reason,
+      originalQuantity: record.originalQuantity, previouslyExcluded: record.previouslyExcluded, effectiveDate: record.effectiveDate,
+      previouslyReplaced: (record.entitySnapshot as any)?.warrantyReplacedQuantity,
       quantityBefore: record.quantityBefore || 0,
       quantityExcluded: record.quantityExcluded || 0,
       quantityRemaining: record.quantityRemaining || 0,
@@ -841,20 +906,28 @@ function ExclusionManagement({ category }: { category: "asset" | "custody" }) {
             <DialogTitle className="text-base font-bold">تفاصيل استبعاد {itemLabel}</DialogTitle>
           </DialogHeader>
           {selectedRecord && (
-            <div className="space-y-4">
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+              <p className="text-xs text-muted-foreground">عملية منفذة محفوظة تاريخيًا؛ لا يمكن تعديلها أو حذفها.</p>
               <div className="grid grid-cols-2 gap-3">
                 {[
                   ["رقم الاستبعاد", (selectedRecord as any).exclusionCode],
                   ["نوع الاستبعاد", (selectedRecord as any).exclusionMode === "full" ? "كلي" : "جزئي"],
                   ["اسم العنصر", getEntityName(selectedRecord)],
                   ["رمز العنصر", getEntityCode(selectedRecord)],
-                  ["الكمية قبل", String((selectedRecord as any).quantityBefore || 0)],
+                  ["الكمية الأصلية", String((selectedRecord as any).originalQuantity ?? "غير محفوظة")],
+                  ["قيمة الوحدة وقت الاستبعاد", selectedRecord.originalUnitValue ?? "غير محفوظة تاريخياً"],
+                  ["نوع الاستبعاد", (selectedRecord.entitySnapshot as any)?.exclusionTypeName || "غير محفوظ تاريخياً"],
+                  ["المستبعد سابقًا", String((selectedRecord as any).previouslyExcluded ?? "غير محفوظ")],
+                  ["المستبدل بالضمان سابقًا", String((selectedRecord as any).entitySnapshot?.warrantyReplacedQuantity ?? "غير محفوظ")],
+                  ["المتبقي قبل العملية", String((selectedRecord as any).quantityBefore || 0)],
+                  ["تاريخ السريان", (selectedRecord as any).effectiveDate || "غير محفوظ"],
+                  ["تاريخ تسجيل العملية", new Date((selectedRecord as any).createdAt).toLocaleString("ar-SA")],
                   ["الكمية المستبعدة", String((selectedRecord as any).quantityExcluded || 0)],
                   ["الكمية المتبقية", String((selectedRecord as any).quantityRemaining || 0)],
                   ["الموظف", (selectedRecord as any).oldEmployeeName || "—"],
                   ["القسم", (selectedRecord as any).oldDepartmentName || "—"],
                   ["الموقع", (selectedRecord as any).oldLocationName || "—"],
-                  ["التاريخ", new Date((selectedRecord as any).createdAt).toLocaleString("ar-SA")],
+
                 ].map(([label, value]) => (
                   <div key={label} className="flex flex-col gap-0.5">
                     <span className="text-[10px] font-bold text-muted-foreground">{label}</span>
@@ -879,6 +952,14 @@ function ExclusionManagement({ category }: { category: "asset" | "custody" }) {
                   </div>
                 </div>
               )}
+              {Array.isArray(selectedRecord.exclusionImages) && selectedRecord.exclusionImages.length > 0 && (
+                <div className="grid grid-cols-2 gap-2">
+                  {(selectedRecord.exclusionImages as string[]).map((url, index) => (
+                    <img key={index} src={url} alt={"مرفق الاستبعاد " + (index + 1)} className="rounded border object-contain max-h-40 w-full" />
+                  ))}
+                </div>
+              )}
+              <ExclusionHistory id={selectedRecord.id} />
               <div className="flex gap-2 pt-2">
                 <Button size="sm" className="gap-1.5 text-xs" onClick={() => { handlePrintReport(selectedRecord); setShowDetails(false); }}>
                   <Printer className="w-3.5 h-3.5" /> طباعة التقرير
@@ -904,8 +985,7 @@ export default function Exclusions() {
   const [custodySubTab, setCustodySubTab] = useState(0);
 
   const subTabs = [
-    { label: "استبعاد جزئي", color: "text-amber-600" },
-    { label: "استبعاد كلي", color: "text-red-600" },
+    { label: "استبعاد", color: "text-primary" },
     { label: "إدارة الاستبعادات", color: "text-primary" },
   ];
 
@@ -915,7 +995,7 @@ export default function Exclusions() {
   return (
     <DashboardLayout
       title="إدارة الاستبعادات"
-      subtitle="استبعاد جزئي وكلي للأصول والعهد مع إدارة كاملة للعمليات"
+      subtitle="استبعاد الكمية المطلوبة من الأصول والعهد مع حفظ تاريخ العمليات"
     >
       {/* التبويبات العلوية: أصول / عهد */}
       <div className="flex gap-2 mb-4">
@@ -943,7 +1023,7 @@ export default function Exclusions() {
         </button>
       </div>
 
-      {/* التبويبات الفرعية: جزئي / كلي / إدارة */}
+      {/* التبويبات الفرعية: تنفيذ الاستبعاد / إدارة الاستبعادات */}
       <div className="flex border-b border-border mb-6">
         {subTabs.map((tab, idx) => (
           <button
@@ -961,9 +1041,8 @@ export default function Exclusions() {
       </div>
 
       {/* محتوى التبويب */}
-      {activeSubTab === 0 && <ExclusionWizard mode="partial" category={topTab} />}
-      {activeSubTab === 1 && <ExclusionWizard mode="full" category={topTab} />}
-      {activeSubTab === 2 && <ExclusionManagement category={topTab} />}
+      {activeSubTab === 0 && <ExclusionWizard key={topTab} category={topTab} />}
+      {activeSubTab === 1 && <ExclusionManagement key={topTab} category={topTab} />}
     </DashboardLayout>
   );
 }

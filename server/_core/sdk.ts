@@ -1,4 +1,4 @@
-import { AXIOS_TIMEOUT_MS, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { AXIOS_TIMEOUT_MS, COOKIE_NAME, SESSION_TTL_MS } from "@shared/const";
 import { ForbiddenError } from "@shared/_core/errors";
 import axios, { type AxiosInstance } from "axios";
 import { parse as parseCookieHeader } from "cookie";
@@ -22,6 +22,7 @@ export type SessionPayload = {
   openId: string;
   appId: string;
   name: string;
+  sessionVersion: string;
 };
 
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
@@ -30,8 +31,7 @@ const GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserI
 
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
-    console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
-    if (!ENV.oAuthServerUrl) {
+    if (process.env.OAUTH_ENABLED === 'true' && !ENV.oAuthServerUrl) {
       console.error(
         "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
       );
@@ -83,6 +83,7 @@ const createOAuthHttpClient = (): AxiosInstance =>
   });
 
 class SDKServer {
+  private readonly requestUsers = new WeakMap<Request, Promise<User>>();
   private readonly client: AxiosInstance;
   private readonly oauthService: OAuthService;
 
@@ -156,6 +157,7 @@ class SDKServer {
 
   private getSessionSecret() {
     const secret = ENV.cookieSecret;
+    if (secret.length < 32) throw new Error("JWT_SECRET must contain at least 32 random characters");
     return new TextEncoder().encode(secret);
   }
 
@@ -166,13 +168,19 @@ class SDKServer {
    */
   async createSessionToken(
     openId: string,
-    options: { expiresInMs?: number; name?: string } = {}
+    options: { expiresInMs?: number; name?: string; credentialHash?: string } = {}
   ): Promise<string> {
+    const user = await db.initializeSessionVersion(openId);
+    // A password reset between bcrypt verification and issuance must not lend
+    // the new account epoch to a request authenticated with the old password.
+    if (options.credentialHash !== undefined && user.passwordHash !== options.credentialHash)
+      throw ForbiddenError("Credentials changed; log in again");
     return this.signSession(
       {
         openId,
         appId: ENV.appId,
-        name: options.name || "",
+        name: options.name || user.name || user.username || "مستخدم",
+        sessionVersion: user.sessionVersion!,
       },
       options
     );
@@ -183,7 +191,7 @@ class SDKServer {
     options: { expiresInMs?: number } = {}
   ): Promise<string> {
     const issuedAt = Date.now();
-    const expiresInMs = options.expiresInMs ?? ONE_YEAR_MS;
+    const expiresInMs = Math.min(options.expiresInMs ?? SESSION_TTL_MS, SESSION_TTL_MS);
     const expirationSeconds = Math.floor((issuedAt + expiresInMs) / 1000);
     const secretKey = this.getSessionSecret();
 
@@ -191,15 +199,17 @@ class SDKServer {
       openId: payload.openId,
       appId: payload.appId,
       name: payload.name,
+      sessionVersion: payload.sessionVersion,
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuedAt()
       .setExpirationTime(expirationSeconds)
       .sign(secretKey);
   }
 
   async verifySession(
     cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string } | null> {
+  ): Promise<(SessionPayload & { user: User }) | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
       return null;
@@ -210,21 +220,26 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, sessionVersion } = payload as Record<string, unknown>;
 
       if (
         !isNonEmptyString(openId) ||
-        !isNonEmptyString(appId) ||
-        !isNonEmptyString(name)
+        appId !== ENV.appId ||
+        !isNonEmptyString(name) ||
+        !isNonEmptyString(sessionVersion)
       ) {
         console.warn("[Auth] Session payload missing required fields");
         return null;
       }
 
+      const user = await db.getUserByOpenId(openId);
+      if (!user || !user.sessionVersion || user.sessionVersion !== sessionVersion) return null;
       return {
         openId,
-        appId,
+        appId: ENV.appId,
         name,
+        sessionVersion,
+        user,
       };
     } catch (error) {
       console.warn("[Auth] Session verification failed", String(error));
@@ -257,6 +272,15 @@ class SDKServer {
   }
 
   async authenticateRequest(req: Request): Promise<User> {
+    let user=this.requestUsers.get(req);
+    if (!user) {
+      user=this.authenticateUncachedRequest(req);
+      this.requestUsers.set(req,user);
+    }
+    return user;
+  }
+
+  private async authenticateUncachedRequest(req: Request): Promise<User> {
     // Regular authentication flow
     const cookies = this.parseCookies(req.headers.cookie);
     const sessionCookie = cookies.get(COOKIE_NAME);
@@ -266,42 +290,14 @@ class SDKServer {
       throw ForbiddenError("Invalid session cookie");
     }
 
-    const sessionUserId = session.openId;
     const signedInAt = new Date();
-    
-    // محاولة البحث عن المستخدم بـ username أولاً (للمستخدمين المحليين)
-    // ثم البحث بـ openId (للمستخدمين من OAuth)
-    let user = await db.getUserByUsername(sessionUserId);
-    if (!user) {
-      user = await db.getUserByOpenId(sessionUserId);
-    }
+    const user = session.user;
 
-    // If user not in DB, sync from OAuth server automatically
-    if (!user) {
-      try {
-        const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
-        await db.upsertUser({
-          openId: userInfo.openId,
-          name: userInfo.name || null,
-          email: userInfo.email ?? null,
-          loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
-          lastSignedIn: signedInAt,
-        });
-        user = await db.getUserByOpenId(userInfo.openId);
-      } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
-        throw ForbiddenError("Failed to sync user info");
-      }
+    // Keep current roles/assignment from the database on every request, while
+    // avoiding a write for each page query immediately after a successful login.
+    if (!user.lastSignedIn || signedInAt.getTime() - new Date(user.lastSignedIn).getTime() >= 60_000) {
+      await db.upsertUser({openId: user.openId, lastSignedIn: signedInAt});
     }
-
-    if (!user) {
-      throw ForbiddenError("User not found");
-    }
-
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
 
     return user;
   }

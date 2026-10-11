@@ -5,6 +5,7 @@ import { auditLog } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
 import { storagePut } from "../storage";
 import { desc, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 
 const BACKUP_VERSION = "2.0";
 const MIGRATIONS_TABLE = "__drizzle_migrations";
@@ -249,6 +250,7 @@ async function insertRawRows(
 
     const valueTuples = batch.map((row, rowIndex) => {
       const values = columns.map((column) => {
+        if (tableName === 'users' && column.name === 'sessionVersion') return sql`${randomUUID()}`;
         if (!Object.prototype.hasOwnProperty.call(row, column.name)) {
           throw new Error(
             `النسخة لا تحتوي العمود ${tableName}.${column.name} في السجل رقم ${offset + rowIndex + 1}`
@@ -302,8 +304,10 @@ function validateBackupSchema(
     // جدول migrations محفوظ للمراجعة ولا تتم استعادته، لذلك لا نحتاج تطابق أعمدته للاستعادة.
     if (tableName === MIGRATIONS_TABLE) continue;
 
-    const backupColumns = normalizeColumnSignature(backupSchema.columns[tableName] ?? []);
-    const currentColumns = normalizeColumnSignature(currentSchema.columns[tableName] ?? []);
+    // Session authority is never restored, including from pre-security v2 backups.
+    const comparable = (column: ColumnMeta) => tableName !== 'users' || column.name !== 'sessionVersion';
+    const backupColumns = normalizeColumnSignature((backupSchema.columns[tableName] ?? []).filter(comparable));
+    const currentColumns = normalizeColumnSignature((currentSchema.columns[tableName] ?? []).filter(comparable));
 
     if (backupColumns.join("|") !== currentColumns.join("|")) {
       throw new Error(

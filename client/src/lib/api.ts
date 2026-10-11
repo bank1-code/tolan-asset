@@ -74,10 +74,6 @@ export function useExclusions() {
   return trpc.operations.exclusions.list.useQuery();
 }
 
-export function useNextExclusionCode() {
-  return trpc.operations.exclusions.getNextCode.useQuery();
-}
-
 export function useClearanceRecords() {
   return trpc.operations.clearance.list.useQuery();
 }
@@ -229,5 +225,6 @@ export const statusLabels: Record<string, { label: string; color: string }> = {
   ACTIVE: { label: "نشط", color: "bg-emerald-100 text-emerald-700" },
   EXCLUDED_PARTIAL: { label: "مستبعد جزئياً", color: "bg-amber-100 text-amber-700" },
   EXCLUDED_FULL: { label: "مستبعد كلياً", color: "bg-red-100 text-red-700" },
+  REPLACED: { label: "مستبدل بالضمان", color: "bg-violet-100 text-violet-700" },
   EXCLUDED: { label: "مستبعد", color: "bg-red-100 text-red-700" },
 };

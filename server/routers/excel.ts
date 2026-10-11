@@ -9,48 +9,19 @@ import {
   branches,
   locations,
   auditLog,
+  financialClassifications,
 } from "../../drizzle/schema";
-import { eq, desc, and, gte, lte } from "drizzle-orm";
+import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
 import { logAuditAction } from "../security";
-import * as XLSX from "xlsx";
+import { inventoryLifecycle } from "../inventoryLifecycle";
+import { readExcelRows } from "../excelInput";
 
-// Helper: Convert DB rows to Excel buffer
-function createExcelBuffer(data: Record<string, unknown>[], headers: { key: string; label: string }[], sheetName: string): string {
-  const wb = XLSX.utils.book_new();
-  
-  // Create header row + data rows
-  const wsData = [
-    headers.map(h => h.label),
-    ...data.map(row => headers.map(h => {
-      const val = row[h.key];
-      if (val === null || val === undefined) return "";
-      if (val instanceof Date) return val.toISOString().split("T")[0];
-      return String(val);
-    }))
-  ];
-  
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-  
-  // Set RTL for Arabic
-  ws["!dir"] = "rtl";
-  
-  // Set column widths
-  ws["!cols"] = headers.map(h => ({ wch: Math.max(h.label.length * 2, 15) }));
-  
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  
-  const buffer = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
-  return buffer;
-}
+import { createExcelBuffer } from "../excelUtils";
+import { hierarchyExcelProcedures } from "../hierarchyExcel";
 
 // Helper: Parse Excel buffer to array of objects
-function parseExcelBuffer(base64Data: string, headers: { key: string; label: string; aliases?: string[] }[]): Record<string, string>[] {
-  const buffer = Buffer.from(base64Data, "base64");
-  const wb = XLSX.read(buffer, { type: "buffer" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  if (!ws) return [];
-  
-  const rawData = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
+async function parseExcelBuffer(base64Data: string, headers: { key: string; label: string; aliases?: string[] }[]): Promise<Record<string, string>[]> {
+  const rawData = await readExcelRows(base64Data);
   if (rawData.length < 2) return [];
   
   // Skip header row, map data rows
@@ -96,8 +67,8 @@ function parseExcelBuffer(base64Data: string, headers: { key: string; label: str
 const assetHeaders = [
   { key: "assetName", label: "اسم الأصل" },
   { key: "assetCode", label: "الرمز" },
-  { key: "quantity", label: "الكمية" },
-  { key: "assetValue", label: "قيمة الوحدة" },
+  { key: "quantity", label: "الكمية", numeric: true },
+  { key: "assetValue", label: "قيمة الوحدة", numeric: true },
   { key: "condition", label: "الحالة" },
   { key: "employeeName", label: "المستلم" },
   { key: "departmentName", label: "القسم" },
@@ -105,13 +76,15 @@ const assetHeaders = [
   { key: "locationName", label: "الموقع" },
   { key: "status", label: "الوضع" },
   { key: "notes", label: "ملاحظات" },
+  { key: "classificationCode", label: "رمز التصنيف" },
+  { key: "classificationName", label: "التصنيف المالي" },
 ];
 
 const custodyHeaders = [
   { key: "name", label: "اسم العهدة" },
   { key: "code", label: "الرمز" },
-  { key: "quantity", label: "الكمية" },
-  { key: "assetValue", label: "قيمة الوحدة" },
+  { key: "quantity", label: "الكمية", numeric: true },
+  { key: "assetValue", label: "قيمة الوحدة", numeric: true },
   { key: "condition", label: "الحالة" },
   { key: "employeeName", label: "المستلم" },
   { key: "departmentName", label: "القسم" },
@@ -119,6 +92,8 @@ const custodyHeaders = [
   { key: "locationName", label: "الموقع" },
   { key: "status", label: "الوضع" },
   { key: "notes", label: "ملاحظات" },
+  { key: "classificationCode", label: "رمز التصنيف" },
+  { key: "classificationName", label: "التصنيف المالي" },
 ];
 
 const employeeHeaders = [
@@ -141,18 +116,21 @@ const reportHeaders = [
   { key: "type", label: "النوع" },
   { key: "code", label: "الرمز" },
   { key: "name", label: "الاسم" },
-  { key: "quantity", label: "الكمية" },
-  { key: "unitValue", label: "قيمة الوحدة" },
-  { key: "totalValue", label: "إجمالي القيمة" },
+  { key: "quantity", label: "الكمية", numeric: true },
+  { key: "unitValue", label: "قيمة الوحدة", numeric: true },
+  { key: "totalValue", label: "إجمالي القيمة", numeric: true },
   { key: "employeeName", label: "المستلم" },
   { key: "departmentName", label: "القسم" },
   { key: "branchName", label: "الفرع" },
   { key: "locationName", label: "الموقع" },
   { key: "status", label: "الحالة" },
   { key: "notes", label: "ملاحظات" },
+  { key: "classificationCode", label: "رمز التصنيف" },
+  { key: "classificationName", label: "التصنيف المالي" },
 ];
 
 export const excelRouter = router({
+  ...hierarchyExcelProcedures,
   // ==========================================
   // تصدير الأصول
   // ==========================================
@@ -164,8 +142,8 @@ export const excelRouter = router({
       .select({
         assetName: assets.assetName,
         assetCode: assets.assetCode,
-        quantity: assets.quantity,
-        assetValue: assets.assetValue,
+        quantity: assets.quantity, warrantyReplacedQuantity: assets.warrantyReplacedQuantity,
+        assetValue: assets.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
         condition: assets.condition,
         employeeName: employees.fullName,
         departmentName: departments.name,
@@ -175,6 +153,7 @@ export const excelRouter = router({
         notes: assets.notes,
       })
       .from(assets)
+      .leftJoin(financialClassifications, eq(assets.classificationId, financialClassifications.id))
       .leftJoin(employees, eq(assets.assignedTo, employees.id))
       .leftJoin(departments, eq(assets.departmentId, departments.id))
       .leftJoin(branches, eq(departments.branchId, branches.id))
@@ -182,8 +161,8 @@ export const excelRouter = router({
       .orderBy(assets.id);
 
     const statusMap: Record<string, string> = {
-      ACTIVE: "نشط",
-      EXCLUDED: "مستبعد",
+      DRAFT: "مسودة", CANCELLED: "مسودة ملغاة", ACTIVE: "نشط",
+      REPLACED: "مستبدل بالضمان", EXCLUDED: "مستبعد",
       TRANSFERRED: "منقول",
     };
 
@@ -215,7 +194,7 @@ export const excelRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const rows = parseExcelBuffer(input.base64Data, assetHeaders);
+      const rows = await parseExcelBuffer(input.base64Data, assetHeaders);
       if (rows.length === 0) throw new Error("الملف فارغ أو لا يحتوي على بيانات صالحة");
 
       // Get lookup maps
@@ -223,6 +202,7 @@ export const excelRouter = router({
       const allDepts = await db.select().from(departments);
       const allBranches = await db.select().from(branches);
       const allLocs = await db.select().from(locations);
+      const allClassifications = await db.select().from(financialClassifications);
 
 
       let imported = 0;
@@ -236,6 +216,8 @@ export const excelRouter = router({
             skipped++;
             continue;
           }
+          if (row.assetCode?.trim())
+            throw new Error("لا يمكن إعادة استيراد سجل يحمل رمزاً رسمياً؛ استخدم قالب الإضافة بدون رمز. الرقم الرسمي يُولد عند اعتماد السجل الجديد.");
 
           const locationName = String(row.locationName || "").trim();
           const departmentName = String(row.departmentName || "").trim();
@@ -254,18 +236,19 @@ export const excelRouter = router({
           const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
           if (!employee) throw new Error(`الموظف "${employeeName || "غير محدد"}" غير موجود`);
 
-          if (!input.previewOnly) await db.insert(assets).values({
-            assetName: row.assetName,
-            assetCode: row.assetCode || null,
-            quantity: parseInt(row.quantity) || 1,
-            assetValue: row.assetValue || "0",
-            condition: row.condition || "جيد جدًا",
-            assignedTo: employee.id,
-            departmentId: department.id,
-            locationId: location.id,
-            status: "ACTIVE",
-            notes: row.notes || null,
-          });
+          if (!Number.isInteger(Number(row.quantity || 1)) || Number(row.quantity || 1) <= 0) throw new Error("الكمية يجب أن تكون عدداً صحيحاً موجباً");
+          if (!/^\d{1,10}(\.\d{1,2})?$/.test(String(row.assetValue || "0"))) throw new Error("القيمة غير صالحة");
+          const classification = allClassifications.find(c => c.active && c.code.toUpperCase() === String(row.classificationCode || "").trim().toUpperCase());
+          if (row.classificationCode && !classification) throw new Error("رمز التصنيف غير موجود أو غير نشط");
+          if (row.classificationName && (!classification || classification.name !== row.classificationName)) throw new Error("اسم التصنيف لا يطابق الرمز");
+          const entityName = String(row.assetName || row.name || "").trim();
+          if (!entityName || entityName.length > 500) throw new Error("الاسم غير صالح");
+          if (!input.previewOnly) await router(inventoryLifecycle("asset")).createCaller(ctx).create({
+              assetName: row.assetName,
+              quantity: Number(row.quantity || 1), assetValue: row.assetValue || "0", classificationId: classification?.id ?? null,
+              condition: row.condition || "جيد جدًا", assignedTo: employee.id,
+              departmentId: department.id, locationId: location.id, notes: row.notes || null,
+            });
           imported++;
         } catch (err: any) {
           errors.push(`صف ${i + 2}: ${err.message}`);
@@ -296,8 +279,8 @@ export const excelRouter = router({
       .select({
         name: custodyItems.name,
         code: custodyItems.code,
-        quantity: custodyItems.quantity,
-        assetValue: custodyItems.assetValue,
+        quantity: custodyItems.quantity, warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity,
+        assetValue: custodyItems.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
         condition: custodyItems.condition,
         employeeName: employees.fullName,
         departmentName: departments.name,
@@ -307,6 +290,7 @@ export const excelRouter = router({
         notes: custodyItems.notes,
       })
       .from(custodyItems)
+      .leftJoin(financialClassifications, eq(custodyItems.classificationId, financialClassifications.id))
       .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
       .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
       .leftJoin(branches, eq(departments.branchId, branches.id))
@@ -314,8 +298,8 @@ export const excelRouter = router({
       .orderBy(custodyItems.id);
 
     const statusMap: Record<string, string> = {
-      ACTIVE: "نشط",
-      EXCLUDED: "مستبعد",
+      DRAFT: "مسودة", CANCELLED: "مسودة ملغاة", ACTIVE: "نشط",
+      REPLACED: "مستبدل بالضمان", EXCLUDED: "مستبعد",
       TRANSFERRED: "منقول",
     };
 
@@ -347,13 +331,14 @@ export const excelRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const rows = parseExcelBuffer(input.base64Data, custodyHeaders);
+      const rows = await parseExcelBuffer(input.base64Data, custodyHeaders);
       if (rows.length === 0) throw new Error("الملف فارغ أو لا يحتوي على بيانات صالحة");
 
       const allEmployees = await db.select().from(employees);
       const allDepts = await db.select().from(departments);
       const allBranches = await db.select().from(branches);
       const allLocs = await db.select().from(locations);
+      const allClassifications = await db.select().from(financialClassifications);
 
 
       let imported = 0;
@@ -367,6 +352,8 @@ export const excelRouter = router({
             skipped++;
             continue;
           }
+          if (row.code?.trim())
+            throw new Error("لا يمكن إعادة استيراد سجل يحمل رمزاً رسمياً؛ استخدم قالب الإضافة بدون رمز. الرقم الرسمي يُولد عند اعتماد السجل الجديد.");
 
           const locationName = String(row.locationName || "").trim();
           const departmentName = String(row.departmentName || "").trim();
@@ -385,18 +372,19 @@ export const excelRouter = router({
           const employee = allEmployees.find(e => String(e.fullName || "").trim() === employeeName);
           if (!employee) throw new Error(`الموظف "${employeeName || "غير محدد"}" غير موجود`);
 
-          if (!input.previewOnly) await db.insert(custodyItems).values({
-            name: row.name,
-            code: row.code || null,
-            quantity: parseInt(row.quantity) || 1,
-            assetValue: row.assetValue || "0",
-            condition: row.condition || "جيد جدًا",
-            assignedTo: employee.id,
-            departmentId: department.id,
-            locationId: location.id,
-            status: "ACTIVE",
-            notes: row.notes || null,
-          });
+          if (!Number.isInteger(Number(row.quantity || 1)) || Number(row.quantity || 1) <= 0) throw new Error("الكمية يجب أن تكون عدداً صحيحاً موجباً");
+          if (!/^\d{1,10}(\.\d{1,2})?$/.test(String(row.assetValue || "0"))) throw new Error("القيمة غير صالحة");
+          const classification = allClassifications.find(c => c.active && c.code.toUpperCase() === String(row.classificationCode || "").trim().toUpperCase());
+          if (row.classificationCode && !classification) throw new Error("رمز التصنيف غير موجود أو غير نشط");
+          if (row.classificationName && (!classification || classification.name !== row.classificationName)) throw new Error("اسم التصنيف لا يطابق الرمز");
+          const entityName = String(row.assetName || row.name || "").trim();
+          if (!entityName || entityName.length > 500) throw new Error("الاسم غير صالح");
+          if (!input.previewOnly) await router(inventoryLifecycle("custody")).createCaller(ctx).create({
+              name: row.name,
+              quantity: Number(row.quantity || 1), assetValue: row.assetValue || "0", classificationId: classification?.id ?? null,
+              condition: row.condition || "جيد جدًا", assignedTo: employee.id,
+              departmentId: department.id, locationId: location.id, notes: row.notes || null,
+            });
           imported++;
         } catch (err: any) {
           errors.push(`صف ${i + 2}: ${err.message}`);
@@ -460,7 +448,7 @@ export const excelRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const rows = parseExcelBuffer(input.base64Data, employeeHeaders);
+      const rows = await parseExcelBuffer(input.base64Data, employeeHeaders);
       if (rows.length === 0) throw new Error("الملف فارغ أو لا يحتوي على بيانات صالحة");
 
       // الاستيراد الأولي للموظفين لا يتطلب قسماً أو موقعاً.
@@ -551,8 +539,8 @@ export const excelRouter = router({
           .select({
             assetName: assets.assetName,
             assetCode: assets.assetCode,
-            quantity: assets.quantity,
-            assetValue: assets.assetValue,
+            quantity: assets.quantity, warrantyReplacedQuantity: assets.warrantyReplacedQuantity,
+            assetValue: assets.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
             employeeName: employees.fullName,
             departmentName: departments.name,
             branchName: branches.name,
@@ -561,24 +549,26 @@ export const excelRouter = router({
             notes: assets.notes,
           })
           .from(assets)
+      .leftJoin(financialClassifications, eq(assets.classificationId, financialClassifications.id))
           .leftJoin(employees, eq(assets.assignedTo, employees.id))
           .leftJoin(departments, eq(assets.departmentId, departments.id))
           .leftJoin(branches, eq(departments.branchId, branches.id))
-          .leftJoin(locations, eq(assets.locationId, locations.id));
+          .leftJoin(locations, eq(assets.locationId, locations.id))
+          .where(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`);
 
         for (const a of allAssets) {
           items.push({
             type: "أصل",
             code: a.assetCode || "",
             name: a.assetName,
-            quantity: String(a.quantity),
+            quantity: String(Math.max(0, a.quantity - a.warrantyReplacedQuantity)),
             unitValue: a.assetValue || "0",
-            totalValue: String(Number(a.assetValue || 0) * (a.quantity || 1)),
+            totalValue: String(Number(a.assetValue || 0) * Math.max(0, a.quantity - a.warrantyReplacedQuantity)),
             employeeName: a.employeeName || "",
             departmentName: a.departmentName || "",
             branchName: a.branchName || "",
             locationName: a.locationName || "",
-            status: a.status === "ACTIVE" ? "نشط" : a.status === "EXCLUDED" ? "مستبعد" : a.status,
+            status: a.status === "ACTIVE" ? "نشط" : a.status === "EXCLUDED" ? "مستبعد" : a.status === "REPLACED" ? "مستبدل بالضمان" : a.status,
             notes: a.notes || "",
           });
         }
@@ -589,8 +579,8 @@ export const excelRouter = router({
           .select({
             name: custodyItems.name,
             code: custodyItems.code,
-            quantity: custodyItems.quantity,
-            assetValue: custodyItems.assetValue,
+            quantity: custodyItems.quantity, warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity,
+            assetValue: custodyItems.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
             employeeName: employees.fullName,
             departmentName: departments.name,
             branchName: branches.name,
@@ -599,24 +589,26 @@ export const excelRouter = router({
             notes: custodyItems.notes,
           })
           .from(custodyItems)
+      .leftJoin(financialClassifications, eq(custodyItems.classificationId, financialClassifications.id))
           .leftJoin(employees, eq(custodyItems.assignedTo, employees.id))
           .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
           .leftJoin(branches, eq(departments.branchId, branches.id))
-          .leftJoin(locations, eq(custodyItems.locationId, locations.id));
+          .leftJoin(locations, eq(custodyItems.locationId, locations.id))
+          .where(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`);
 
         for (const c of allCustody) {
           items.push({
             type: "عهدة",
             code: c.code || "",
             name: c.name,
-            quantity: String(c.quantity),
+            quantity: String(Math.max(0, c.quantity - c.warrantyReplacedQuantity)),
             unitValue: c.assetValue || "0",
-            totalValue: String(Number(c.assetValue || 0) * (c.quantity || 1)),
+            totalValue: String(Number(c.assetValue || 0) * Math.max(0, c.quantity - c.warrantyReplacedQuantity)),
             employeeName: c.employeeName || "",
             departmentName: c.departmentName || "",
             branchName: c.branchName || "",
             locationName: c.locationName || "",
-            status: c.status === "ACTIVE" ? "نشط" : c.status === "EXCLUDED" ? "مستبعد" : c.status,
+            status: c.status === "ACTIVE" ? "نشط" : c.status === "EXCLUDED" ? "مستبعد" : c.status === "REPLACED" ? "مستبدل بالضمان" : c.status,
             notes: c.notes || "",
           });
         }
@@ -684,8 +676,9 @@ export const excelRouter = router({
     .input(z.object({ type: z.enum(["assets", "custody", "employees"]) }))
     .mutation(async ({ input }) => {
       const headersMap = {
-        assets: { headers: assetHeaders, sheet: "الأصول", filename: "قالب_الأصول.xlsx" },
-        custody: { headers: custodyHeaders, sheet: "العهد", filename: "قالب_العهد.xlsx" },
+        // الرمز غير موجود في قوالب الاستيراد لأنه يُولد آلياً حسب الموقع.
+        assets: { headers: assetHeaders.filter(h => h.key !== "assetCode"), sheet: "الأصول", filename: "قالب_الأصول.xlsx" },
+        custody: { headers: custodyHeaders.filter(h => h.key !== "code"), sheet: "العهد", filename: "قالب_العهد.xlsx" },
         employees: { headers: employeeHeaders, sheet: "الموظفين", filename: "قالب_الموظفين.xlsx" },
       };
 
@@ -696,7 +689,6 @@ export const excelRouter = router({
       if (input.type === "assets") {
         sampleData.push({
           assetName: "مثال: جهاز حاسب",
-          assetCode: "AST-001",
           quantity: "1",
           assetValue: "5000",
           condition: "جيد جدًا",
@@ -710,7 +702,6 @@ export const excelRouter = router({
       } else if (input.type === "custody") {
         sampleData.push({
           name: "مثال: طابعة",
-          code: "CUS-001",
           quantity: "1",
           assetValue: "2000",
           condition: "جيد جدًا",

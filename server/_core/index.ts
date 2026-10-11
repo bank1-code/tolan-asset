@@ -6,8 +6,9 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
-import { serveStatic, setupVite } from "./vite";
-import { applySecurityMiddleware } from "../security";
+import { serveStatic } from "./serveStatic";
+import { applySecurityMiddleware, requestValidator } from "../security";
+import {registerApiBodyParsers} from '../apiBodyParser';
 import { fileUploadRouter } from "../fileUpload";
 import { fileDownloadRouter } from "../fileDownload";
 
@@ -31,13 +32,14 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  if (!process.env.DATABASE_URL || (process.env.JWT_SECRET || '').length < 32)
+    throw new Error('Configure DATABASE_URL and a random JWT_SECRET of at least 32 characters');
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Apply security middleware
   applySecurityMiddleware(app);
+  registerApiBodyParsers(app);
+  app.use(requestValidator);
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   // File upload route (PDF, DOCX, XLSX)
@@ -54,21 +56,24 @@ async function startServer() {
   );
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
+    // Avoid shipping or loading development tooling in an npm ci --omit=dev installation.
+    const developmentModule = './vite.ts';
+    const { setupVite } = await import(developmentModule);
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  const port = process.env.NODE_ENV === 'production' ? preferredPort : await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
+  server.listen(port, process.env.APP_HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0'), () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(error=>{console.error('[Startup]',error.message);process.exit(1);});

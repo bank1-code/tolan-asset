@@ -136,7 +136,7 @@ export default function DashboardLayout({
               </div>
               <div className="hidden lg:block">
                 <p className="text-xs font-bold text-foreground">{user?.name || user?.username || "مستخدم"}</p>
-                <p className="text-[10px] text-muted-foreground">{{ owner: "المالك", admin: "مدير النظام", accountant: "المحاسب", employee: "الموظف" }[user?.role || "employee"]}</p>
+                <p className="text-[10px] text-muted-foreground">{{ owner: "المالك", admin: "مدير النظام", accounting_manager: "مدير الحسابات", accountant: "المحاسب", employee: "الموظف" }[user?.role || "employee"]}</p>
               </div>
             </div>
           </div>

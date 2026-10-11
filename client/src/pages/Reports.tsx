@@ -1,3 +1,4 @@
+import { escapeHtml } from "@shared/html";
 /**
  * Reports.tsx - التقارير
  * مربوط بالـ API الحقيقي عبر tRPC
@@ -54,9 +55,9 @@ export default function Reports() {
       report_type: r.type === "asset" ? "أصل" : "عهدة",
       code: r.code || "",
       name: r.name || "",
-      quantity: r.quantity || 0,
+      quantity: Math.max(0, (r.quantity || 0) - (r.warrantyReplacedQuantity || 0)),
       asset_value: parseFloat(r.unitValue) || 0,
-      total_value: (r.quantity || 0) * (parseFloat(r.unitValue) || 0),
+      total_value: Math.max(0, (r.quantity || 0) - (r.warrantyReplacedQuantity || 0)) * (parseFloat(r.unitValue) || 0),
       owner_name: r.employeeName || "-",
       department: r.departmentName || "-",
       branch: r.branchName || "-",
@@ -122,26 +123,26 @@ export default function Reports() {
 
     const tableRows = filteredData.map((row: any, i: number) => `
       <tr>
-        <td>${i + 1}</td>
-        <td><span class="type-badge ${row.report_type === 'أصل' ? 'type-asset' : 'type-custody'}">${row.report_type}</span></td>
-        <td class="code-cell">${row.code}</td>
-        <td>${row.name}</td>
-        <td class="num-cell">${row.quantity}</td>
-        ${showUnitValue ? `<td class="num-cell">${formatNumber(row.asset_value)}</td>` : ""}
-        ${showTotalColumn ? `<td class="num-cell total-cell">${formatNumber(row.total_value)}</td>` : ""}
-        <td>${row.owner_name}</td>
-        <td>${row.department}</td>
-        <td>${row.branch}</td>
-        <td>${row.location}</td>
-        <td>${row.condition}</td>
-        <td class="notes-cell">${row.notes}</td>
+        <td>${escapeHtml(i + 1)}</td>
+        <td><span class="type-badge ${escapeHtml(row.report_type === 'أصل' ? 'type-asset' : 'type-custody')}">${escapeHtml(row.report_type)}</span></td>
+        <td class="code-cell">${escapeHtml(row.code)}</td>
+        <td>${escapeHtml(row.name)}</td>
+        <td class="num-cell">${escapeHtml(row.quantity)}</td>
+        ${showUnitValue ? `<td class="num-cell">${escapeHtml(formatNumber(row.asset_value))}</td>` : ""}
+        ${showTotalColumn ? `<td class="num-cell total-cell">${escapeHtml(formatNumber(row.total_value))}</td>` : ""}
+        <td>${escapeHtml(row.owner_name)}</td>
+        <td>${escapeHtml(row.department)}</td>
+        <td>${escapeHtml(row.branch)}</td>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${escapeHtml(row.condition)}</td>
+        <td class="notes-cell">${escapeHtml(row.notes)}</td>
       </tr>
     `).join("");
 
     const totalRowHtml = showTotalRow ? `
       <tr class="total-row">
-        <td colspan="${showUnitValue && showTotalColumn ? 6 : showUnitValue || showTotalColumn ? 5 : 4}" style="text-align:left;font-weight:700;">الإجمالي الكلي</td>
-        <td class="num-cell total-cell" style="font-weight:700;">${formatNumber(stats.totalOverall)}</td>
+        <td colspan="${escapeHtml(showUnitValue && showTotalColumn ? 6 : showUnitValue || showTotalColumn ? 5 : 4)}" style="text-align:left;font-weight:700;">الإجمالي الكلي</td>
+        <td class="num-cell total-cell" style="font-weight:700;">${escapeHtml(formatNumber(stats.totalOverall))}</td>
         <td colspan="5"></td>
       </tr>
     ` : "";
@@ -182,18 +183,18 @@ export default function Reports() {
       @media print { .no-print { display: none; } }
     </style></head><body>
     <div class="header"><h1>تقرير العهد والأصول</h1><div class="subtitle">نظام إدارة العهد والأصول</div></div>
-    <div class="filter-info">${filterText}</div>
+    <div class="filter-info">${escapeHtml(filterText)}</div>
     <table><thead><tr><th>م</th><th>النوع</th><th>الرمز</th><th>الاسم</th><th>الكمية</th>
     ${showUnitValue ? "<th>قيمة الوحدة</th>" : ""}${showTotalColumn ? "<th>إجمالي القيمة</th>" : ""}
     <th>الموظف/المسؤول</th><th>القسم</th><th>الفرع</th><th>الموقع</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
     <tbody>${tableRows}${totalRowHtml}</tbody></table>
     <div class="stats-section"><div class="stats-grid">
-      <div class="stat-card"><div class="label">عدد العناصر</div><div class="value">${stats.count}</div></div>
-      <div class="stat-card"><div class="label">إجمالي الأصول</div><div class="value">${formatCurrency(stats.totalAssets)}</div></div>
-      <div class="stat-card"><div class="label">إجمالي العهد</div><div class="value">${formatCurrency(stats.totalCustody)}</div></div>
-      <div class="stat-card total"><div class="label">الإجمالي الكلي</div><div class="value">${formatCurrency(stats.totalOverall)}</div></div>
+      <div class="stat-card"><div class="label">عدد العناصر</div><div class="value">${escapeHtml(stats.count)}</div></div>
+      <div class="stat-card"><div class="label">إجمالي الأصول</div><div class="value">${escapeHtml(formatCurrency(stats.totalAssets))}</div></div>
+      <div class="stat-card"><div class="label">إجمالي العهد</div><div class="value">${escapeHtml(formatCurrency(stats.totalCustody))}</div></div>
+      <div class="stat-card total"><div class="label">الإجمالي الكلي</div><div class="value">${escapeHtml(formatCurrency(stats.totalOverall))}</div></div>
     </div></div>
-    <div class="footer"><div>التاريخ والوقت: ${new Date().toLocaleString("ar-SA")}</div><div>نظام إدارة العهد والأصول</div></div>
+    <div class="footer"><div>التاريخ والوقت: ${escapeHtml(new Date().toLocaleString("ar-SA"))}</div><div>نظام إدارة العهد والأصول</div></div>
     <div class="no-print"><button onclick="window.print()">طباعة التقرير</button></div>
     </body></html>`;
     printWindow.document.write(html);

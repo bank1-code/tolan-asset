@@ -1,16 +1,21 @@
 import { z } from "zod";
 import { publicProcedure, adminProcedure, router } from "../_core/trpc";
+import { ROLES } from "../../shared/roles";
 import { getDb } from "../db";
 import { employees, users } from "../../drizzle/schema";
 import { and, eq, ne } from "drizzle-orm";
 import { sdk } from "../_core/sdk";
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { COOKIE_NAME, SESSION_TTL_MS } from "@shared/const";
 import { getSessionCookieOptions } from "../_core/cookies";
 import { logAuditAction, clearBruteForceBlock } from "../security";
 import { TRPCError } from "@trpc/server";
 import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
+import {takeLoginAttempt,clearLoginAttempts} from "../loginAttempts";
 
-const roleSchema = z.enum(["owner", "admin", "accountant", "employee"]);
+const roleSchema = z.enum(ROLES);
+const newPasswordSchema = z.string().min(12,"كلمة المرور الجديدة يجب أن تكون 12 محرفًا على الأقل")
+  .refine(value=>Buffer.byteLength(value,'utf8')<=72,"كلمة المرور تتجاوز الحد الآمن (72 بايت)");
 
 async function validateEmployeeLink(db: Awaited<ReturnType<typeof getDb>>, role: string, employeeId?: number | null, excludeUserId?: number) {
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -31,6 +36,7 @@ export const localAuthRouter = router({
   login: publicProcedure
     .input(z.object({ username: z.string().min(1, "اسم المستخدم مطلوب"), password: z.string().min(1, "كلمة المرور مطلوبة") }))
     .mutation(async ({ ctx, input }) => {
+      takeLoginAttempt(ctx.req?.ip||"unknown",input.username);
       const db = await getDb();
       if (!db) throw new Error("قاعدة البيانات غير متوفرة");
       const [user] = await db.select().from(users).where(eq(users.username, input.username)).limit(1);
@@ -39,9 +45,10 @@ export const localAuthRouter = router({
       }
       await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, user.id));
       ctx.res.clearCookie(COOKIE_NAME, getSessionCookieOptions(ctx.req));
-      const token = await sdk.createSessionToken(user.username || user.openId, { name: user.name || user.username || "مستخدم" });
-      ctx.res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(ctx.req), maxAge: ONE_YEAR_MS });
+      const token = await sdk.createSessionToken(user.openId, { name: user.name || user.username || "مستخدم", credentialHash: user.passwordHash });
+      ctx.res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(ctx.req), maxAge: SESSION_TTL_MS });
       clearBruteForceBlock(ctx.req?.ip || "unknown");
+      clearLoginAttempts(ctx.req?.ip||"unknown",input.username);
       await logAuditAction({ tableName: "users", actionType: "LOGIN", actionDescription: `تسجيل دخول: ${user.username}`, performedBy: user.id, performedByName: user.name || user.username || "مستخدم", ipAddress: ctx.req?.ip || "unknown" });
       return { success: true, user: { id: user.id, name: user.name, username: user.username, role: user.role, employeeId: user.employeeId } };
     }),
@@ -59,7 +66,7 @@ export const localAuthRouter = router({
   createUser: adminProcedure
     .input(z.object({
       username: z.string().min(3, "اسم المستخدم يجب أن يكون 3 أحرف على الأقل"),
-      password: z.string().min(4, "كلمة المرور يجب أن تكون 4 أحرف على الأقل"),
+      password: newPasswordSchema,
       name: z.string().min(1, "الاسم مطلوب"),
       role: roleSchema,
       employeeId: z.number().optional().nullable(),
@@ -71,7 +78,7 @@ export const localAuthRouter = router({
       if (existing) throw new TRPCError({ code: "CONFLICT", message: "اسم المستخدم موجود مسبقاً" });
       const employeeId = await validateEmployeeLink(db, input.role, input.employeeId);
       await db.insert(users).values({
-        openId: `local_${input.username}_${Date.now()}`, username: input.username,
+        openId: `local_${randomUUID()}`, username: input.username,
         passwordHash: await bcrypt.hash(input.password, 10), name: input.name,
         role: input.role, employeeId, loginMethod: "local", lastSignedIn: new Date(),
       });
@@ -80,7 +87,7 @@ export const localAuthRouter = router({
     }),
 
   updateUser: adminProcedure
-    .input(z.object({ id: z.number(), name: z.string().optional(), role: roleSchema.optional(), employeeId: z.number().optional().nullable(), password: z.string().min(4).optional() }))
+    .input(z.object({ id: z.number(), name: z.string().optional(), role: roleSchema.optional(), employeeId: z.number().optional().nullable(), password: newPasswordSchema.optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb(); if (!db) throw new Error("قاعدة البيانات غير متوفرة");
       const [target] = await db.select().from(users).where(eq(users.id, input.id)).limit(1);
@@ -94,7 +101,10 @@ export const localAuthRouter = router({
       if (input.name !== undefined) updateData.name = input.name;
       if (input.role !== undefined) updateData.role = input.role;
       if (input.role !== undefined || input.employeeId !== undefined) updateData.employeeId = finalRole === "employee" ? employeeId : null;
-      if (input.password) updateData.passwordHash = await bcrypt.hash(input.password, 10);
+      if (input.password) {
+        updateData.passwordHash = await bcrypt.hash(input.password, 10);
+        updateData.sessionVersion = randomUUID();
+      }
       if (!Object.keys(updateData).length) throw new TRPCError({ code: "BAD_REQUEST", message: "لا توجد بيانات للتحديث" });
       await db.update(users).set(updateData).where(eq(users.id, input.id));
       await logAuditAction({ tableName: "users", actionType: "UPDATE", actionDescription: `تعديل مستخدم #${input.id}`, performedBy: ctx.user.id, performedByName: ctx.user.name || "مدير", ipAddress: ctx.req?.ip || "unknown" });

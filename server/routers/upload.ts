@@ -37,6 +37,15 @@ function generateFileName(prefix: string): string {
 }
 
 export const uploadRouter = router({
+  document: operatorProcedure.input(z.object({ base64: z.string().min(1), category: z.enum(["exclusion", "warranty", "inventory"]).default("exclusion") })).mutation(async ({ input }) => {
+    const clean = input.base64.replace(/^data:application\/pdf;base64,/, "");
+    const buffer = Buffer.from(clean, "base64");
+    if (buffer.length > MAX_IMAGE_SIZE) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "حجم المستند يتجاوز 10 ميجابايت" });
+    if (buffer.subarray(0, 5).toString() !== "%PDF-") throw new TRPCError({ code: "BAD_REQUEST", message: "المستند يجب أن يكون PDF" });
+    const key = `documents/${input.category}/${crypto.randomUUID()}.pdf`;
+    const { url } = await storagePut(key, buffer, "application/pdf");
+    return { url, key };
+  }),
   /**
    * رفع صورة واحدة - تحويل إلى WebP وحفظ في S3
    * يُرجع رابط الصورة المحفوظة
@@ -45,7 +54,7 @@ export const uploadRouter = router({
     .input(
       z.object({
         base64: z.string().min(1),
-        category: z.enum(["asset", "custody", "invoice", "exclusion", "document", "branding"]),
+        category: z.enum(["asset", "custody", "invoice", "exclusion", "warranty", "inventory", "document", "branding"]),
         entityId: z.number().optional(),
       })
     )

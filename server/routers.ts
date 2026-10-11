@@ -11,6 +11,9 @@ import { backupRouter } from "./routers/backup";
 import { localAuthRouter } from "./routers/localAuth";
 import { uploadRouter } from "./routers/upload";
 import { inventoryCountRouter } from "./routers/inventoryCount";
+import { warrantyRouter } from "./warrantyRouter";
+import { depreciationRouter } from "./depreciationRouter";
+import { revokeUserSessions } from "./db";
 
 export const appRouter = router({
   system: systemRouter,
@@ -25,7 +28,8 @@ export const appRouter = router({
       loginMethod: ctx.user.loginMethod,
       lastSignedIn: ctx.user.lastSignedIn,
     }) : null),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user) await revokeUserSessions(ctx.user.id);
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return {
@@ -44,6 +48,8 @@ export const appRouter = router({
   localAuth: localAuthRouter,
   upload: uploadRouter,
   inventoryCount: inventoryCountRouter,
+  warranty: warrantyRouter,
+  depreciation: depreciationRouter,
 });
 
 export type AppRouter = typeof appRouter;

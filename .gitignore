@@ -111,3 +111,12 @@ temp/
 .project-config.json
 
 .manus-logs/
+
+# Local QA backups and generated account secrets
+/qa-results/ui-full-cycle/backups/
+/qa-results/ui-full-cycle/qa-login-details.txt
+
+# Generated QA and release artifacts
+/output/
+/qa-results/
+/release/

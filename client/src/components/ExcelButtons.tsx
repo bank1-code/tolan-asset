@@ -25,8 +25,11 @@ function downloadBase64File(base64: string, filename: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  // Keep the Blob alive until the browser has started consuming the download.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 // Helper: قراءة ملف كـ base64
@@ -78,7 +81,7 @@ export function AssetsExcelButtons() {
   });
   const importMut = trpc.excel.importAssets.useMutation({
     onSuccess: (data) => {
-      toast.success(`تم استيراد ${data.imported} أصل بنجاح`);
+      toast.success(`تم حفظ ${data.imported} أصل كمسودات بانتظار الاعتماد`);
       if (data.errors.length > 0) toast.warning(`تم رفض ${data.errors.length} صف`);
       setPreview(null);
       window.location.reload();
@@ -118,7 +121,7 @@ export function AssetsExcelButtons() {
 export function CustodyExcelButtons() {
   const [preview, setPreview] = useState<{ base64Data: string; total: number; accepted: number; rejected: number; errors: string[] } | null>(null);
   const exportMut = trpc.excel.exportCustody.useMutation({ onSuccess: (data) => { downloadBase64File(data.base64, data.filename); toast.success(`تم تصدير ${data.count} عهدة بنجاح`); }, onError: (e) => toast.error(e.message) });
-  const importMut = trpc.excel.importCustody.useMutation({ onSuccess: (data) => { toast.success(`تم استيراد ${data.imported} عهدة بنجاح`); if (data.errors.length > 0) toast.warning(`تم رفض ${data.errors.length} صف`); setPreview(null); window.location.reload(); }, onError: (e) => toast.error(e.message) });
+  const importMut = trpc.excel.importCustody.useMutation({ onSuccess: (data) => { toast.success(`تم حفظ ${data.imported} عهدة كمسودات بانتظار الاعتماد`); if (data.errors.length > 0) toast.warning(`تم رفض ${data.errors.length} صف`); setPreview(null); window.location.reload(); }, onError: (e) => toast.error(e.message) });
   const previewMut = trpc.excel.importCustody.useMutation({ onSuccess: (data, variables) => setPreview({ base64Data: variables.base64Data, total: data.total, accepted: data.imported, rejected: data.skipped, errors: data.errors }), onError: (e) => toast.error(e.message) });
   const templateMut = trpc.excel.downloadTemplate.useMutation({ onSuccess: (data) => { downloadBase64File(data.base64, data.filename); toast.success("تم تحميل القالب بنجاح"); }, onError: (e) => toast.error(e.message) });
   const handleImport = async () => {
@@ -191,6 +194,53 @@ export function AuditLogExcelButton() {
 // ==========================================
 // أزرار تصدير/استيراد الموظفين
 // ==========================================
+type HierarchyImportResult = { imported: number; existing: number; rejected: number; total: number; previewOnly: boolean; results: Array<{ rowNumber: number; name: string; status: string; message: string }> };
+
+export function HierarchyExcelButtons({ type }: { type: "locations" | "branches" | "departments" }) {
+  const utils = trpc.useUtils();
+  const [review, setReview] = useState<{ base64Data: string; result: HierarchyImportResult } | null>(null);
+  const label = { locations: "المواقع", branches: "الفروع", departments: "الأقسام" }[type];
+  const template = trpc.excel.hierarchyTemplate.useMutation({ onSuccess: data => downloadBase64File(data.base64, data.filename), onError: error => toast.error(error.message) });
+  const exported = trpc.excel.exportHierarchy.useMutation({ onSuccess: data => { downloadBase64File(data.base64, data.filename); toast.success(`تم تصدير ${data.count} سجل`); }, onError: error => toast.error(error.message) });
+  const preview = trpc.excel.importHierarchy.useMutation({ onSuccess: (result, variables) => setReview({ base64Data: variables.base64Data, result }), onError: error => toast.error(error.message) });
+  const imported = trpc.excel.importHierarchy.useMutation({ onSuccess: (result, variables) => { setReview({ base64Data: variables.base64Data, result }); void utils.settings.invalidate(); toast.success(`تمت إضافة ${result.imported} سجل`); }, onError: error => toast.error(error.message) });
+  const busy = template.isPending || exported.isPending || preview.isPending || imported.isPending;
+  const chooseFile = () => {
+    const input = document.createElement("input"); input.type = "file"; input.accept = ".xlsx,.xls";
+    input.onchange = async () => {
+      const file = input.files?.[0]; if (!file) return;
+      if (file.size > 10 * 1024 * 1024) { toast.error("الحد الأقصى لحجم الملف 10 ميجابايت"); return; }
+      try { preview.mutate({ type, base64Data: await readFileAsBase64(file), previewOnly: true }); }
+      catch { toast.error("فشل قراءة الملف"); }
+    };
+    input.click();
+  };
+  return <>
+    <div className="flex items-center gap-1.5">
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => template.mutate({ type })}><FileSpreadsheet className="w-3.5 h-3.5 ml-1" />قالب</Button>
+      <Button size="sm" variant="outline" disabled={busy} onClick={chooseFile}>{preview.isPending ? <Loader2 className="w-3.5 h-3.5 ml-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 ml-1" />}استيراد</Button>
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => exported.mutate({ type })}><Download className="w-3.5 h-3.5 ml-1" />تصدير</Button>
+    </div>
+    <Dialog open={!!review} onOpenChange={open => { if (!open && !imported.isPending) setReview(null); }}>
+      <DialogContent dir="rtl" className="sm:max-w-xl">
+        <DialogHeader><DialogTitle>{review?.result.previewOnly ? "معاينة استيراد" : "نتيجة استيراد"} {label}</DialogTitle><DialogDescription>{review?.result.previewOnly ? "لم تُحفظ البيانات بعد. يُضاف الجديد فقط، وتُتجاهل السجلات الموجودة. الأكواد تُولد تلقائيًا عند الحفظ." : "اكتمل الاستيراد. التفاصيل التالية تعرض نتيجة كل صف."}</DialogDescription></DialogHeader>
+        {review && <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2 text-center text-sm">
+            <div className="rounded border p-3">{review.result.previewOnly ? "جاهز للإضافة" : "تمت إضافته"}<div className="text-xl font-bold">{review.result.imported}</div></div>
+            <div className="rounded border p-3">موجود / مكرر<div className="text-xl font-bold">{review.result.existing}</div></div>
+            <div className="rounded border p-3">مرفوض<div className="text-xl font-bold">{review.result.rejected}</div></div>
+          </div>
+          <ScrollArea className="h-64 rounded border p-3"><div className="space-y-3 text-sm">{review.result.results.map(row => <div key={row.rowNumber} className={row.status === "error" ? "text-destructive" : ""}><div className="font-medium">الصف {row.rowNumber}: {row.name || "بدون اسم"}</div><div>{row.message}</div></div>)}</div></ScrollArea>
+          {review.result.previewOnly && <p className="text-xs text-muted-foreground">سيعاد التحقق عند التنفيذ. استورد المواقع أولًا، ثم الفروع، ثم الأقسام. يمكن تنفيذ الصفوف المقبولة بعد مراجعة المرفوضة.</p>}
+        </div>}
+        <DialogFooter><Button variant="outline" disabled={imported.isPending} onClick={() => setReview(null)}>{review?.result.previewOnly ? "إلغاء" : "إغلاق"}</Button>
+          {review?.result.previewOnly && <Button disabled={imported.isPending || review.result.imported === 0} onClick={() => imported.mutate({ type, base64Data: review.base64Data, previewOnly: false })}>{imported.isPending && <Loader2 className="w-4 h-4 ml-1 animate-spin" />}تنفيذ الاستيراد</Button>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>;
+}
+
 export function EmployeesExcelButtons() {
   const exportMut = trpc.excel.exportEmployees.useMutation({
     onSuccess: (data) => {
