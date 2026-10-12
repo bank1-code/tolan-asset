@@ -25,6 +25,7 @@ export const users = mysqlTable("users", {
   username: varchar("username", { length: 100 }).unique(),
   passwordHash: varchar("passwordHash", { length: 255 }),
   sessionVersion: varchar("sessionVersion", { length: 64 }),
+  fieldHelpLoginCount: int("fieldHelpLoginCount").default(0).notNull(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),

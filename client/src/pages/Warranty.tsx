@@ -1,3 +1,5 @@
+import FieldHelp from "@/components/FieldHelp";
+import { warrantyHelp } from "@/lib/fieldHelpText";
 import RecordScopeFilters from "@/components/RecordScopeFilters";
 import {
   emptyRecordFilters,
@@ -253,7 +255,7 @@ export default function Warranty() {
   ) => (
     <label className="space-y-1 block text-sm" key={key}>
       <span>{label}</span>
-      <Input
+      <FieldHelp text={warrantyHelp[key]}><Input
         type={type}
         value={form[key]}
         min={type === "number" ? 1 : undefined}
@@ -267,7 +269,7 @@ export default function Warranty() {
             type === "number" ? Number(event.target.value) : event.target.value
           )
         }
-      />
+      /></FieldHelp>
     </label>
   );
   const text = (
@@ -277,11 +279,11 @@ export default function Warranty() {
   ) => (
     <label className="block text-sm space-y-1">
       <span>{label}</span>
-      <textarea
+      <FieldHelp text={warrantyHelp[key]}><textarea
         className="border rounded-lg p-2 w-full min-h-24 bg-background"
         value={form[key]}
         onChange={event => set(key, event.target.value)}
-      />
+      /></FieldHelp>
     </label>
   );
   const summary = (data: any, record: any) => (
@@ -446,14 +448,14 @@ export default function Warranty() {
               )}
               <label className="text-sm block">
                 سياسة الضمان المثبتة بالمستند
-                <select
+                <FieldHelp text={warrantyHelp.warrantyPolicy}><select
                   className="border rounded p-2 mx-2 bg-background"
                   value={form.warrantyPolicy}
                   onChange={event => set("warrantyPolicy", event.target.value)}
                 >
                   <option value="continued">استمرار الفترة الأصلية</option>
                   <option value="renewed">ضمان جديد حسب المستند</option>
-                </select>
+                </select></FieldHelp>
               </label>
               {form.warrantyPolicy === "renewed" ? (
                 <div className="grid sm:grid-cols-2 gap-3">
@@ -479,7 +481,7 @@ export default function Warranty() {
                 أرفق إثبات الضمان وموافقة الاستبدال أو محضر الاستلام. يلزم مستند
                 واحد على الأقل.
               </p>
-              <Input
+              <FieldHelp text={warrantyHelp.documents}><Input
                 type="file"
                 accept="image/*,application/pdf"
                 disabled={busy}
@@ -487,7 +489,7 @@ export default function Warranty() {
                   upload(event.target.files?.[0]);
                   event.target.value = "";
                 }}
-              />
+              /></FieldHelp>
               {documents.map((doc, index) => (
                 <div className="flex items-center gap-3 text-sm" key={index}>
                   <a

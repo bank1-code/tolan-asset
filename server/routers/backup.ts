@@ -251,6 +251,8 @@ async function insertRawRows(
     const valueTuples = batch.map((row, rowIndex) => {
       const values = columns.map((column) => {
         if (tableName === 'users' && column.name === 'sessionVersion') return sql`${randomUUID()}`;
+        // Pre-field-help v2 backups remain restorable; new users start onboarding at zero.
+        if (tableName === 'users' && column.name === 'fieldHelpLoginCount' && !Object.prototype.hasOwnProperty.call(row, column.name)) return sql`${0}`;
         if (!Object.prototype.hasOwnProperty.call(row, column.name)) {
           throw new Error(
             `النسخة لا تحتوي العمود ${tableName}.${column.name} في السجل رقم ${offset + rowIndex + 1}`
@@ -305,7 +307,8 @@ function validateBackupSchema(
     if (tableName === MIGRATIONS_TABLE) continue;
 
     // Session authority is never restored, including from pre-security v2 backups.
-    const comparable = (column: ColumnMeta) => tableName !== 'users' || column.name !== 'sessionVersion';
+    const legacyHelpCounter = !(backupSchema.columns.users ?? []).some(column => column.name === 'fieldHelpLoginCount');
+    const comparable = (column: ColumnMeta) => tableName !== 'users' || (column.name !== 'sessionVersion' && (!legacyHelpCounter || column.name !== 'fieldHelpLoginCount'));
     const backupColumns = normalizeColumnSignature((backupSchema.columns[tableName] ?? []).filter(comparable));
     const currentColumns = normalizeColumnSignature((currentSchema.columns[tableName] ?? []).filter(comparable));
 

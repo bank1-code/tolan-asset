@@ -27,6 +27,7 @@ export const appRouter = router({
       employeeId: ctx.user.employeeId,
       loginMethod: ctx.user.loginMethod,
       lastSignedIn: ctx.user.lastSignedIn,
+      fieldHelpEnabled: ctx.user.fieldHelpEnabled === true,
     }) : null),
     logout: publicProcedure.mutation(async ({ ctx }) => {
       if (ctx.user) await revokeUserSessions(ctx.user.id);

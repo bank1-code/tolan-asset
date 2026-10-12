@@ -12,6 +12,7 @@
   },
   "scripts": {
     "db:security": "node scripts/apply-session-security-migration.mjs",
+    "db:field-help": "node scripts/apply-field-help-migration.mjs",
     "test:depreciation": "node scripts/test-depreciation.mjs",
     "db:depreciation": "node scripts/apply-depreciation-migration.mjs",
     "test:depreciation:db": "node --import tsx scripts/test-depreciation-database.mts",
@@ -21,6 +22,7 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
+    "test:integration:isolated": "node scripts/run-isolated-integration-tests.mjs",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "test:exclusions": "node scripts/test-exclusions.mjs",
     "db:exclusions": "node scripts/apply-exclusion-migration.mjs",

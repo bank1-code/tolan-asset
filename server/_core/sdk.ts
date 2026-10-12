@@ -23,7 +23,9 @@ export type SessionPayload = {
   appId: string;
   name: string;
   sessionVersion: string;
+  fieldHelpLoginOrdinal?: number;
 };
+type AuthenticatedUser = User & { fieldHelpEnabled: boolean };
 
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
 const GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
@@ -83,7 +85,7 @@ const createOAuthHttpClient = (): AxiosInstance =>
   });
 
 class SDKServer {
-  private readonly requestUsers = new WeakMap<Request, Promise<User>>();
+  private readonly requestUsers = new WeakMap<Request, Promise<AuthenticatedUser>>();
   private readonly client: AxiosInstance;
   private readonly oauthService: OAuthService;
 
@@ -170,7 +172,7 @@ class SDKServer {
     openId: string,
     options: { expiresInMs?: number; name?: string; credentialHash?: string } = {}
   ): Promise<string> {
-    const user = await db.initializeSessionVersion(openId);
+    const user = await db.initializeSessionVersion(openId, { countFieldHelpLogin: true, credentialHash: options.credentialHash });
     // A password reset between bcrypt verification and issuance must not lend
     // the new account epoch to a request authenticated with the old password.
     if (options.credentialHash !== undefined && user.passwordHash !== options.credentialHash)
@@ -181,6 +183,7 @@ class SDKServer {
         appId: ENV.appId,
         name: options.name || user.name || user.username || "مستخدم",
         sessionVersion: user.sessionVersion!,
+        fieldHelpLoginOrdinal: user.fieldHelpLoginCount,
       },
       options
     );
@@ -200,6 +203,7 @@ class SDKServer {
       appId: payload.appId,
       name: payload.name,
       sessionVersion: payload.sessionVersion,
+      fieldHelpLoginOrdinal: payload.fieldHelpLoginOrdinal,
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setIssuedAt()
@@ -220,7 +224,7 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name, sessionVersion } = payload as Record<string, unknown>;
+      const { openId, appId, name, sessionVersion, fieldHelpLoginOrdinal } = payload as Record<string, unknown>;
 
       if (
         !isNonEmptyString(openId) ||
@@ -239,6 +243,7 @@ class SDKServer {
         appId: ENV.appId,
         name,
         sessionVersion,
+        fieldHelpLoginOrdinal: typeof fieldHelpLoginOrdinal === "number" && Number.isInteger(fieldHelpLoginOrdinal) && fieldHelpLoginOrdinal >= 1 && fieldHelpLoginOrdinal <= 4 ? fieldHelpLoginOrdinal : undefined,
         user,
       };
     } catch (error) {
@@ -271,7 +276,7 @@ class SDKServer {
     } as GetUserInfoWithJwtResponse;
   }
 
-  async authenticateRequest(req: Request): Promise<User> {
+  async authenticateRequest(req: Request): Promise<AuthenticatedUser> {
     let user=this.requestUsers.get(req);
     if (!user) {
       user=this.authenticateUncachedRequest(req);
@@ -280,7 +285,7 @@ class SDKServer {
     return user;
   }
 
-  private async authenticateUncachedRequest(req: Request): Promise<User> {
+  private async authenticateUncachedRequest(req: Request): Promise<AuthenticatedUser> {
     // Regular authentication flow
     const cookies = this.parseCookies(req.headers.cookie);
     const sessionCookie = cookies.get(COOKIE_NAME);
@@ -299,7 +304,7 @@ class SDKServer {
       await db.upsertUser({openId: user.openId, lastSignedIn: signedInAt});
     }
 
-    return user;
+    return { ...user, fieldHelpEnabled: session.fieldHelpLoginOrdinal !== undefined && session.fieldHelpLoginOrdinal <= 3 };
   }
 }
 

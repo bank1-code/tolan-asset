@@ -1,5 +1,6 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FieldHelpContext } from "@/components/FieldHelp";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -30,7 +31,7 @@ const EmployeePortal = lazy(() => import("./pages/EmployeePortal"));
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const utils = trpc.useUtils();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const { data: user, isLoading, error } = trpc.auth.me.useQuery(undefined, {
     retry: false,
     refetchOnWindowFocus: false,
@@ -62,7 +63,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     return <Login key={loginKey} onLoginSuccess={handleLoginSuccess} />;
   }
 
-  return <>{children}</>;
+  const helpRoute = ["/depreciation", "/warranty", "/transfers", "/settings"].includes(location.replace(/\/+$/, ""));
+  return <FieldHelpContext.Provider value={helpRoute && user.fieldHelpEnabled === true}>{children}</FieldHelpContext.Provider>;
 }
 
 function Router() {

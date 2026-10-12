@@ -1,8 +1,9 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { claimLoginSession } from './loginSession';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -112,15 +113,12 @@ export async function getUserByUsername(username: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function initializeSessionVersion(openId: string) {
+export async function initializeSessionVersion(openId: string, options: { countFieldHelpLogin?: boolean; credentialHash?: string } = {}) {
   const database = await getDb();
   if (!database) throw new Error("Database unavailable");
-  // Atomic initialization keeps concurrent logins on the same epoch.
-  await database.update(users).set({ sessionVersion: randomUUID() })
-    .where(and(eq(users.openId, openId), isNull(users.sessionVersion)));
-  const user = await getUserByOpenId(openId);
-  if (!user?.sessionVersion) throw new Error("Account unavailable");
-  return user;
+  // Serialize logins for this user so each actual login claims a different ordinal.
+  // Refreshes and ordinary requests never enter this path.
+  return claimLoginSession(database, openId, options);
 }
 
 export async function revokeUserSessions(userId: number) {

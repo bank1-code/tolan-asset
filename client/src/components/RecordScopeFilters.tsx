@@ -1,6 +1,8 @@
 import { emptyRecordFilters, type RecordFilters } from "@shared/recordFilters";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
+import FieldHelp from "./FieldHelp";
+import { scopeHelp } from "@/lib/fieldHelpText";
 export default function RecordScopeFilters({
   value,
   onChange,
@@ -89,7 +91,7 @@ export default function RecordScopeFilters({
             <span className="block text-xs font-medium text-muted-foreground">
               {label}
             </span>
-            <select
+            <FieldHelp text={scopeHelp[key]}><select
               aria-label={label}
               value={value[key]}
               disabled={disabled}
@@ -103,12 +105,12 @@ export default function RecordScopeFilters({
                   {"fullName" in row ? row.fullName : row.name}
                 </option>
               ))}
-            </select>
+            </select></FieldHelp>
           </label>
         ))}
       </div>
       <div className="flex flex-wrap gap-2">
-        <Input
+        <FieldHelp text={scopeHelp.search}><Input
           aria-label="البحث بالاسم أو الرمز"
           maxLength={200}
           className="min-w-40 flex-1"
@@ -116,7 +118,7 @@ export default function RecordScopeFilters({
           value={value.search}
           disabled={disabled}
           onChange={event => change("search", event.target.value)}
-        />
+        /></FieldHelp>
         <Button
           variant="outline"
           disabled={disabled}

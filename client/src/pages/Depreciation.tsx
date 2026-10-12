@@ -1,3 +1,5 @@
+import FieldHelp from "@/components/FieldHelp";
+import { depreciationHelp } from "@/lib/fieldHelpText";
 import { useState, useEffect, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -62,14 +64,14 @@ function Field({
   return (
     <label className="block text-xs font-medium space-y-1">
       <span>{label}</span>
-      <input
+      <FieldHelp text={depreciationHelp[label]}><input
         required={required}
         type={type}
         step={type === "number" ? "any" : undefined}
         value={value}
         onChange={e => onChange(e.target.value)}
         className="w-full h-10 rounded-lg border px-3 bg-background"
-      />
+      /></FieldHelp>
       {hint && (
         <span className="block text-muted-foreground font-normal">{hint}</span>
       )}
@@ -90,14 +92,14 @@ function Choice({
   return (
     <label className="block text-xs font-medium space-y-1">
       <span>{label}</span>
-      <select
+      <FieldHelp text={depreciationHelp[label]}><select
         required
         value={value}
         onChange={e => onChange(e.target.value)}
         className="w-full h-10 rounded-lg border px-2 bg-background"
       >
         {children}
-      </select>
+      </select></FieldHelp>
     </label>
   );
 }
@@ -114,7 +116,7 @@ function RateField({
   return (
     <label className="text-xs space-y-1 block">
       النسبة السنوية %
-      <input
+      <FieldHelp text={depreciationHelp["النسبة السنوية %"]}><input
         className="w-full h-10 rounded-lg border px-3"
         value={value}
         onChange={e => {
@@ -133,7 +135,7 @@ function RateField({
             e.currentTarget.reportValidity();
           }
         }}
-      />
+      /></FieldHelp>
       <span className="text-muted-foreground block">
         مثال: 15% = 80 شهراً؛ العمر المعتمد هو أساس الحساب
       </span>
@@ -912,14 +914,14 @@ function BatchForm({ w, onSaved }: { w: any; onSaved: () => void }) {
         />
         <label className="block text-xs space-y-1">
           معرفات الوحدات — كل وحدة في سطر
-          <textarea
+          <FieldHelp text={depreciationHelp["معرفات الوحدات"]}><textarea
             required
             rows={4}
             className="w-full border rounded-lg p-3"
             value={unitText}
             onChange={e => setUnitText(e.target.value)}
             placeholder="SERIAL-001&#10;SERIAL-002"
-          />
+          /></FieldHelp>
         </label>
         <Field
           label="ملاحظات"
@@ -1218,7 +1220,7 @@ function MovementForm({ w, onSaved }: { w: any; onSaved: () => void }) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {payload?.units.map((u: string) => (
               <label key={u} className="flex gap-2 text-sm">
-                <input
+                <FieldHelp text={depreciationHelp["الوحدات المتأثرة"]}><input
                   type="checkbox"
                   checked={units.includes(u)}
                   onChange={e =>
@@ -1228,7 +1230,7 @@ function MovementForm({ w, onSaved }: { w: any; onSaved: () => void }) {
                         : units.filter(x => x !== u)
                     )
                   }
-                />
+                /></FieldHelp>
                 {u}
               </label>
             ))}
@@ -1247,13 +1249,13 @@ function MovementForm({ w, onSaved }: { w: any; onSaved: () => void }) {
             />
             <label className="text-xs">
               معرفات وحدات البديل بنفس ترتيب الوحدات المختارة
-              <textarea
+              <FieldHelp text={depreciationHelp["معرفات البديل"]}><textarea
                 required
                 className="w-full border rounded-lg p-3 mt-1"
                 rows={3}
                 value={replacementUnits}
                 onChange={e => setReplacementUnits(e.target.value)}
-              />
+              /></FieldHelp>
             </label>
           </Grid>
         )}

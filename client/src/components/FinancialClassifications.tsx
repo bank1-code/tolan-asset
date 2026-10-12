@@ -1,4 +1,5 @@
 import { useState } from "react";
+import FieldHelp from "@/components/FieldHelp";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -34,7 +35,7 @@ export default function FinancialClassifications() {
         >
           <label className="text-xs">
             رمز التصنيف
-            <input
+            <FieldHelp text="رمز فريد وواضح للمجموعة المالية، مثل FURNITURE؛ يستخدم لربط التصنيف بالسجلات والاستيراد والتقارير."><input
               required
               maxLength={40}
               value={code}
@@ -42,18 +43,18 @@ export default function FinancialClassifications() {
               className="mt-1 w-full h-10 rounded-lg border px-3"
               placeholder="FURNITURE"
               dir="ltr"
-            />
+            /></FieldHelp>
           </label>
           <label className="text-xs">
             اسم التصنيف
-            <input
+            <FieldHelp text="اسم المجموعة المالية مثل أثاث وتركيبات؛ تحدد لها سياسة الإهلاك والعمر والقيمة المتبقية، مستقلة عن القسم التنظيمي."><input
               required
               maxLength={255}
               value={name}
               onChange={e => setName(e.target.value)}
               className="mt-1 w-full h-10 rounded-lg border px-3"
               placeholder="أثاث وتركيبات"
-            />
+            /></FieldHelp>
           </label>
           <Button className="self-end" disabled={create.isPending}>
             إضافة تصنيف

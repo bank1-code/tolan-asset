@@ -1,3 +1,4 @@
+import FieldHelp from "@/components/FieldHelp";
 import { escapeHtml } from "@shared/html";
 import { remainingQuantity } from "@shared/inventoryQuantity";
 /**
@@ -378,15 +379,15 @@ export default function Transfers() {
               <label className="text-xs font-bold text-foreground">البحث عن الأصل أو العهدة</label>
               <div className="relative">
                 <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
-                <input
+                <FieldHelp text={"ابحث بجزء من اسم الأصل أو العهدة أو رمزها لاختيار السجل النشط المطلوب نقله."}><input
                   value={transferSearch}
                   onChange={(e) => setTransferSearch(e.target.value)}
                   placeholder="ابحث باسم الأصل/العهدة أو الرمز..."
                   className="w-full h-10 pr-10 pl-3 rounded-lg bg-white border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
+                /></FieldHelp>
               </div>
               <Select value={transferItemId} onValueChange={handleSelectTransferItem}>
-                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر من نتائج البحث" /></SelectTrigger>
+                <FieldHelp text={"اختر الأصل أو العهدة المراد نقلها؛ تظهر السجلات النشطة التي لديها كمية متبقية فقط."}><SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر من نتائج البحث" /></SelectTrigger></FieldHelp>
                 <SelectContent>
                   {filteredTransferItems.length === 0 ? (
                     <div className="py-4 text-center text-xs text-muted-foreground">لا توجد نتائج مطابقة</div>
@@ -419,28 +420,28 @@ export default function Transfers() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold">الموظف الجديد</label>
                   <Select value={toEmployeeId} onValueChange={setToEmployeeId} disabled={!selectedTransferItem}>
-                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الموظف" /></SelectTrigger>
+                    <FieldHelp text={"الموظف الذي ستصبح الوحدات في عهدته بعد تنفيذ النقل."}><SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الموظف" /></SelectTrigger></FieldHelp>
                     <SelectContent>{employees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold">الموقع الجديد</label>
                   <Select value={toLocationId} onValueChange={handleLocationChange} disabled={!selectedTransferItem}>
-                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الموقع" /></SelectTrigger>
+                    <FieldHelp text={"الموقع الذي ستنقل إليه الوحدات؛ يحدد الفروع المتاحة للوجهة."}><SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الموقع" /></SelectTrigger></FieldHelp>
                     <SelectContent>{locations_.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold">الفرع الجديد</label>
                   <Select value={toBranchId} onValueChange={(v)=>{setToBranchId(v);setToDepartmentId("")}} disabled={!toLocationId}>
-                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الفرع" /></SelectTrigger>
+                    <FieldHelp text={"الفرع المستلم ضمن الموقع المختار؛ يحدد الأقسام المتاحة للوجهة."}><SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر الفرع" /></SelectTrigger></FieldHelp>
                     <SelectContent>{destinationBranches.map((b:any)=><SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold">القسم الجديد</label>
                   <Select value={toDepartmentId} onValueChange={setToDepartmentId} disabled={!toBranchId}>
-                    <SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر القسم" /></SelectTrigger>
+                    <FieldHelp text={"القسم المستلم ضمن الفرع المختار؛ يحفظ ضمن التخصيص الجديد بعد التنفيذ."}><SelectTrigger className="h-10 bg-white"><SelectValue placeholder="اختر القسم" /></SelectTrigger></FieldHelp>
                     <SelectContent>{destinationDepartments.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>

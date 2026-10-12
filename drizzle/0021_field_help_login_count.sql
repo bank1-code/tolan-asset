@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD COLUMN `fieldHelpLoginCount` INT NOT NULL DEFAULT 0;

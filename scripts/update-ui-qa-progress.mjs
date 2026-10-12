@@ -1,5 +1,5 @@
 // Local QA evidence bookkeeping only. Never inserts or changes application data.
-import {readFileSync,writeFileSync} from 'node:fs';
+import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 const root='qa-results/ui-full-cycle',read=file=>JSON.parse(readFileSync(`${root}/${file}`,'utf8'));
 const coverage=read('coverage.json');
 const update=(key,status,evidence,actual)=>{const c=coverage.cases.find(c=>c.key===key);Object.assign(c,{status,evidence:[...new Set([...c.evidence,...evidence])],actual});};
@@ -24,6 +24,12 @@ update('REPORT','PASS_PERFORMED',['report-2026-09-restored-verification.json','r
 update('EXCEL','PARTIAL',['settings-excel-verification.json','operational-excel-verification.json','report-2026-10-interim-verification.json'],'نجحت 280 مطابقة لتصدير القيود الأساسية، و136 للتقرير الرقمي، و221 لقوالب وصادرات الإعدادات، و612 لصادرات الأصول والعهد، وتقرير أكتوبر الجزئي طابق Excel. تصدير قيود حركات أكتوبر النهائي ينتظر اعتماد الشهر بعد نهايته.');
 update('HISTORY','PARTIAL',['timeline-observed-verification.json','history-retest-ui.json','transfer-history-names-ui.jpg'],'طابقت 10 نتائج لتتبع الاستبعاد والنقل والضمان والجرد واستقلال تاريخ البديل وغياب جرد العنصر غير المفحوص. أصلح عرض القيم المركبة واللقطات الجزئية وأسماء التخصيص المحفوظة وشارة مستبدل بالضمان، ثم أعيد اختبارها فعلياً. الأرشيف محفوظ والمرفقات اللاحقة موثقة. طباعة الورق/نافذة الطباعة الفعلية لم تتحقق في المتصفح المدمج.');
 update('RETRY','PARTIAL',['stale-draft-ui-observed.json','financial-negative-verification.json','final-state-verification.json'],'الأرقام الرسمية فريدة واعتماد واحد لكل سجل. اختبر تبويبان يعدلان المسودة المالية نفسها: حفظ الأول، ورفض الثاني القديم برسالة تعارض، دون استبدال الملاحظة أو زيادة نسخة أو قيد. لم ينفذ اختبار تنافس معاملات حقيقي على قاعدة مستقلة.');
+if(existsSync(`${root}/isolated-integration-latest.json`)){
+ const isolated=read('isolated-integration-latest.json');
+ if(isolated.status==='PASS'&&isolated.sourceUnchanged&&isolated.temporarySchemaRemoved){
+  update('RETRY','PARTIAL',['isolated-integration-latest.json','combined-automated-tests.json'],'الأرقام الرسمية فريدة، ورفضت الواجهة حفظ نسخة المسودة المالية القديمة. نجحت اختبارات التزامن الفعلي على قاعدة مستقلة: طلبا استبعاد متنافسان لا يتجاوزان المتبقي، وإعادة تنفيذ المسودة تستقر مرة واحدة؛ طلبا ضمان متداخلان لا ينشئان كمية زائدة، وإعادة الطلب تنشئ بديلاً واحداً ورقماً واحداً. نجحت الحالات المعزولة الـ13، ومنها رجوع المعاملة عند فشل التدقيق والنسخ والاستعادة. بيانات القاعدة الأصلية لم تتغير وحذفت قاعدة الاختبار. بقيت منافسة النقل الجماعي والاعتماد المالي الفعلي خارج نطاق هذه الحالات الـ13.');
+ }
+}
 coverage.status='PERFORMED_WITH_LIMITATIONS';
 coverage.updatedAt=new Date().toISOString();writeFileSync(`${root}/coverage.json`,JSON.stringify(coverage,null,2));
 const cases=read('lifecycle-cases.json');

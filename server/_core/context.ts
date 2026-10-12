@@ -5,7 +5,7 @@ import { sdk } from "./sdk";
 export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
   res: CreateExpressContextOptions["res"];
-  user: User | null;
+  user: (User & { fieldHelpEnabled?: boolean }) | null;
 };
 
 export async function createContext(

@@ -34,10 +34,10 @@ describe.skipIf(process.env.RUN_BACKUP_DB_TESTS!=='1')('Actual isolated backup r
  it('restores pre-security v2 backups while generating new session authority',async()=>{
   const api=backupRouter.createCaller(ctx());await api.create();
   const backup=JSON.parse(Buffer.from(state.content,'base64').toString('utf8'));
-  backup.schema.columns.users=backup.schema.columns.users.filter((column:any)=>column.name!=='sessionVersion');
-  for(const user of backup.tables.users)delete user.sessionVersion;
+  backup.schema.columns.users=backup.schema.columns.users.filter((column:any)=>!['sessionVersion','fieldHelpLoginCount'].includes(column.name));
+  for(const user of backup.tables.users){delete user.sessionVersion;delete user.fieldHelpLoginCount;}
   const data=Buffer.from(Buffer.from(JSON.stringify(backup)).toString('base64')).toString('base64');
   expect((await api.restore({base64Data:data})).success).toBe(true);
-  const [rows]:any=await pool.query('SELECT sessionVersion FROM users');expect(rows.every((user:any)=>Boolean(user.sessionVersion))).toBe(true);
+  const [rows]:any=await pool.query('SELECT sessionVersion,fieldHelpLoginCount FROM users');expect(rows.every((user:any)=>Boolean(user.sessionVersion)&&user.fieldHelpLoginCount===0)).toBe(true);
  });
 });
