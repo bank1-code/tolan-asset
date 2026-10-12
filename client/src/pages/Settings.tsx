@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { trpc } from "@/lib/trpc";
 import {
   MapPin, Building2, Plus, Trash2, Edit, Save, X, Users,
-  AlertTriangle, Database, Download, Upload, Eye, Fingerprint, User, Loader2, ImageIcon
+  AlertTriangle, Database, Download, Upload, Eye, Fingerprint, User, Loader2, ImageIcon, BookOpen, FileText, Settings2
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -52,6 +52,9 @@ export default function Settings() {
               <ImageIcon className="w-3.5 h-3.5" /> هوية النظام
             </TabsTrigger>
           )}
+          {isAdmin && <TabsTrigger value="system_setup" className="rounded-lg text-xs px-4 py-2 gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
+            <Settings2 className="w-3.5 h-3.5" /> الدليل التشغيلي
+          </TabsTrigger>}
         </TabsList>
 
         <TabsContent value="locations"><LocationsTab /></TabsContent>
@@ -62,9 +65,67 @@ export default function Settings() {
         <TabsContent value="exclusion_types"><ExclusionTypesTab /></TabsContent>
         {isOwner && <TabsContent value="backup"><BackupTab /></TabsContent>}
         {isOwner && <TabsContent value="branding"><BrandingTab /></TabsContent>}
+        {isAdmin && <TabsContent value="system_setup"><OperatingGuidesTab /></TabsContent>}
       </Tabs>
     </DashboardLayout>
   );
+}
+
+function OperatingGuidesTab() {
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const guides = [
+    { id: "operating", title: "دليل التشغيل التفصيلي", pages: 61, filename: "tolan-operating-guide.pdf", icon: BookOpen,
+      description: "شرح شاشات البرنامج وخطوات التشغيل وسياسات الإهلاك وربط الأصول والحركات والقيود والتقارير، مع أمثلة وصور." },
+    { id: "quick", title: "دليل المهام اليومية", pages: 8, filename: "tolan-quick-guide.pdf", icon: FileText,
+      description: "مرجع مختصر للإدخال والجرد والمراجعة والإهلاك والتصدير والإقفال." },
+  ];
+
+  const download = async (guide: typeof guides[number]) => {
+    setDownloading(guide.id);
+    try {
+      const response = await fetch(`/api/operating-guides/${guide.id}`, { credentials: "same-origin" });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.error || "تعذر تنزيل الدليل؛ حاول مجددًا");
+      }
+      if (!response.headers.get("content-type")?.includes("application/pdf")) {
+        throw new Error("تعذر تنزيل ملف PDF؛ حدّث الصفحة وحاول مجددًا");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = guide.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast.success("تم بدء تنزيل " + guide.title);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "تعذر تنزيل الدليل");
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return <section className="max-w-4xl space-y-5" dir="rtl">
+    <div>
+      <h3 className="text-base font-bold">أدلة تشغيل البرنامج</h3>
+      <p className="mt-1 text-sm text-muted-foreground">اختر المرجع المطلوب لتنزيله بصيغة PDF. الملفات قابلة للبحث والطباعة.</p>
+    </div>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {guides.map(guide => <article key={guide.id} className="rounded-xl border bg-card p-5 flex flex-col gap-4">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-primary/10 p-3 text-primary"><guide.icon className="h-6 w-6" aria-hidden="true" /></div>
+          <div><h4 className="font-bold">{guide.title}</h4><p className="text-xs text-muted-foreground mt-1">PDF · {guide.pages} صفحة · الإصدار 1.1</p></div>
+        </div>
+        <p className="text-sm text-muted-foreground leading-7 flex-1">{guide.description}</p>
+        <Button onClick={() => void download(guide)} disabled={downloading !== null} className="gap-2 w-full" aria-label={`تنزيل ${guide.title} PDF`}>
+          {downloading === guide.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+          {downloading === guide.id ? "جارٍ التنزيل…" : "تنزيل PDF"}
+        </Button>
+      </article>)}
+    </div>
+  </section>;
 }
 
 const SETTINGS_PAGE_SIZE = 10;

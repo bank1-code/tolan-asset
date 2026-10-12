@@ -17,7 +17,7 @@
     "db:depreciation": "node scripts/apply-depreciation-migration.mjs",
     "test:depreciation:db": "node --import tsx scripts/test-depreciation-database.mts",
     "dev": "set NODE_ENV=development&& tsx watch server/_core/index.ts",
-    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && node scripts/copy-operating-guides.mjs",
     "start": "node scripts/start-production.mjs",
     "check": "tsc --noEmit",
     "format": "prettier --write .",

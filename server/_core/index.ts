@@ -11,6 +11,7 @@ import { applySecurityMiddleware, requestValidator } from "../security";
 import {registerApiBodyParsers} from '../apiBodyParser';
 import { fileUploadRouter } from "../fileUpload";
 import { fileDownloadRouter } from "../fileDownload";
+import { operatingGuidesRouter } from "../operatingGuides";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -46,6 +47,7 @@ async function startServer() {
   app.use(fileUploadRouter);
   // Protected file download route; IDrive objects are exposed through short-lived signed URLs.
   app.use(fileDownloadRouter);
+  app.use(operatingGuidesRouter);
   // tRPC API
   app.use(
     "/api/trpc",

@@ -181,7 +181,7 @@ export default defineConfig({
     ],
     fs: {
       strict: true,
-      deny: ["**/.*"],
+      deny: ["**/.*", "**/server/resources/guides/**", "**/dist/private/**", "**/output/pdf/**", "**/tmp/pdfs/**"],
     },
   },
 });
